@@ -1,0 +1,16 @@
+name: subcellvae-cuda
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch
+  - pytorch-cuda=12.4
+  - numpy
+  - scipy
+  - jupyterlab
+  - pip
+  - pip:
+      - -e .

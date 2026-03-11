@@ -1,0 +1,14 @@
+name: subcellvae
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch
+  - numpy
+  - scipy
+  - jupyterlab
+  - pip
+  - pip:
+      - -e .
