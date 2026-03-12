@@ -1,2 +1,2 @@
-# SubCellVAE
-SubCellVAE: A VAE for learning latent features of subcellular structures
+# SubCellAE
+SubCellAE: AE for learning latent features of subcellular structures
