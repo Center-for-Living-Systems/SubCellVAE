@@ -1,87 +1,524 @@
-import os, random
+"""
+patch_prep.py
+=============
+Primitives for patch extraction from microscopy images.
+
+Supported file types
+--------------------
+``"czi"``  – Zeiss .czi files (loaded via *czifile*).  Raw pixel values are
+             divided by ``255 × 255`` to bring them into a nominal ``[0, 1]``
+             floating-point range.
+``"npy"``  – NumPy .npy files.  Expected array shape after ``np.load`` +
+             ``squeeze``: either ``(C, H, W)`` (multi-channel) or ``(H, W)``
+             (single-channel / already-selected channel).  Values are used
+             as-is (no ``/ 255²`` rescaling); apply normalization if needed.
+
+The file type is controlled by the ``file_type`` parameter of
+:func:`list_image_files`, :func:`compute_dataset_norm_stats`, and
+:func:`load_and_pad`.
+
+Normalization options
+---------------------
+Two optional normalization modes are available, applied **after** raw loading
+and **before** padding:
+
+1. ``"dataset"``  – Whole-dataset, per-channel 1 %–99 % percentile stretch.
+   Call :func:`compute_dataset_norm_stats` once across all files in a run to
+   collect ``(p1, p99)`` per channel, then pass the resulting dict as
+   ``norm_stats`` to :func:`load_and_pad`.
+
+2. ``"image"``    – Per-image, per-channel 1 %–99 % percentile stretch.
+   Stats are computed on the fly inside :func:`load_and_pad` from the single
+   image being loaded; no pre-computation required.
+
+Pass ``norm_mode=None`` (default) to skip normalization entirely.  For .czi
+files without normalization the original ``/ (255 × 255)`` scaling is still
+applied.  For .npy files without normalization values are used unchanged.
+"""
+
+import math
+import os
+import random
+from typing import Dict, Literal, Optional, Tuple
+
+import czifile
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import tifffile
 from skimage import transform
-import czifile
-import math
 
-def image_padding(input_img, pad_size,value):
-    output_img = np.zeros([input_img.shape[0]+pad_size*2,input_img.shape[1]+pad_size*2]) + value
-    output_img[pad_size:input_img.shape[0]+pad_size,pad_size:input_img.shape[1]+pad_size] = input_img
+
+# ---------------------------------------------------------------------------
+# Type aliases
+# ---------------------------------------------------------------------------
+
+# {channel_index: (p1_value, p99_value)}
+NormStats = Dict[int, Tuple[float, float]]
+
+NormMode = Optional[Literal["dataset", "image"]]
+
+FileType = Literal["czi", "npy"]
+
+_EXT_MAP: Dict[str, str] = {
+    "czi": ".czi",
+    "npy": ".npy",
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def image_padding(input_img: np.ndarray, pad_size: int, value: float) -> np.ndarray:
+    """Zero-pad (or constant-pad) a 2-D array on all four sides."""
+    output_img = (
+        np.zeros([input_img.shape[0] + pad_size * 2,
+                  input_img.shape[1] + pad_size * 2]) + value
+    )
+    output_img[
+        pad_size: input_img.shape[0] + pad_size,
+        pad_size: input_img.shape[1] + pad_size,
+    ] = input_img
     return output_img
 
 
-def rotate_coor(x_i,y_i,x_c,y_c,rotate_angle):
- 
-    rotate_angle = rotate_angle*np.pi/180
- 
-    x_o = (x_i-x_c)*math.cos(rotate_angle) - (2*y_c-y_i-y_c)*math.sin(rotate_angle) +x_c
-    y_o = -(x_i-x_c)*math.sin(rotate_angle) - (2*y_c-y_i-y_c)*math.cos(rotate_angle) +(2*y_c-y_c)
+def rotate_coor(
+    x_i: np.ndarray, y_i: np.ndarray,
+    x_c: float, y_c: float,
+    rotate_angle: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Rotate coordinates (x_i, y_i) around centre (x_c, y_c)."""
+    rotate_angle = rotate_angle * np.pi / 180
+    x_o = (
+        (x_i - x_c) * math.cos(rotate_angle)
+        - (2 * y_c - y_i - y_c) * math.sin(rotate_angle)
+        + x_c
+    )
+    y_o = (
+        -(x_i - x_c) * math.sin(rotate_angle)
+        - (2 * y_c - y_i - y_c) * math.cos(rotate_angle)
+        + (2 * y_c - y_c)
+    )
+    return x_o, y_o
 
-    return([x_o,y_o])
 
+def list_image_files(image_folder: str, file_type: FileType = "czi") -> list:
+    """Return a sorted list of image filenames in *image_folder*.
 
-def list_czi_files(image_folder):
+    Parameters
+    ----------
+    image_folder:
+        Directory to scan.
+    file_type:
+        ``"czi"`` – return only ``.czi`` files (default, original behaviour).
+        ``"npy"`` – return only ``.npy`` files.
+
+    Returns
+    -------
+    list[str]
+        Sorted basenames (no directory path).
+    """
+    if file_type not in _EXT_MAP:
+        raise ValueError(
+            f"file_type must be one of {list(_EXT_MAP)}, got {file_type!r}"
+        )
+    ext = _EXT_MAP[file_type]
     return sorted([
         x for x in os.listdir(image_folder)
-        if os.path.isfile(os.path.join(image_folder, x)) and ('.czi' in x)
+        if os.path.isfile(os.path.join(image_folder, x)) and x.endswith(ext)
     ])
 
-def load_and_pad(image_folder, cell_mask_folder, filename, major_ch,
-                 pad_size=64, img_pad_val=None):
-    """Load image + mask, normalize image, and pad both."""
-    img = czifile.imread(os.path.join(image_folder, filename)).squeeze()[major_ch, :, :].astype(float) / (255 * 255)
-    seg = tifffile.imread(os.path.join(cell_mask_folder, "cell_mask_" + filename + ".tif")).squeeze().astype(float)
 
+# backward-compatible alias
+def list_czi_files(image_folder: str) -> list:
+    """Deprecated alias for ``list_image_files(folder, file_type='czi')``."""
+    return list_image_files(image_folder, file_type="czi")
+
+
+# ---------------------------------------------------------------------------
+# Private loading helpers (file-type aware)
+# ---------------------------------------------------------------------------
+
+def _load_raw_squeezed(
+    image_folder: str,
+    filename: str,
+    file_type: FileType,
+) -> np.ndarray:
+    """Load and squeeze a single image file; return a float array.
+
+    For ``"czi"`` files values are divided by ``255 × 255``.
+    For ``"npy"`` files values are used as-is (already float or will be cast).
+
+    The returned array is either ``(C, H, W)`` (multi-channel) or ``(H, W)``
+    (single-channel / pre-selected).
+    """
+    path = os.path.join(image_folder, filename)
+    if file_type == "czi":
+        raw = czifile.imread(path).squeeze().astype(float) / (255 * 255)
+    elif file_type == "npy":
+        raw = np.load(path).squeeze().astype(float)
+    else:
+        raise ValueError(f"Unsupported file_type {file_type!r}. Choose 'czi' or 'npy'.")
+    return raw
+
+
+def _extract_channel(
+    raw: np.ndarray,
+    channel: int,
+    filename: str,
+    file_type: FileType,
+) -> np.ndarray:
+    """Extract a single 2-D channel plane from a raw squeezed array.
+
+    Parameters
+    ----------
+    raw:
+        Squeezed float array; shape ``(C, H, W)`` or ``(H, W)``.
+    channel:
+        Channel index to extract (0-based).
+    filename:
+        Used only for error messages.
+    file_type:
+        Used only for error messages.
+
+    Returns
+    -------
+    np.ndarray
+        2-D array of shape ``(H, W)``.
+    """
+    if raw.ndim == 3:
+        return raw[channel, :, :]
+    elif raw.ndim == 2:
+        # single-channel – channel index must be 0
+        if channel != 0:
+            raise IndexError(
+                f"{file_type} file {filename!r} is single-channel (shape "
+                f"{raw.shape}) but channel={channel} was requested."
+            )
+        return raw
+    else:
+        raise ValueError(
+            f"Unexpected squeezed array shape {raw.shape} from {filename!r}."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Normalization utilities
+# ---------------------------------------------------------------------------
+
+def _percentile_stretch(
+    img: np.ndarray,
+    p1: float,
+    p99: float,
+) -> np.ndarray:
+    """Clip and linearly rescale *img* to [0, 1] using provided percentile bounds.
+
+    Parameters
+    ----------
+    img:
+        Float array (any range).
+    p1, p99:
+        Lower and upper clipping bounds (e.g. 1st and 99th percentiles).
+
+    Returns
+    -------
+    np.ndarray
+        Array clipped to ``[p1, p99]`` and rescaled to ``[0, 1]``.
+        If ``p99 == p1`` the array is returned as all zeros to avoid
+        divide-by-zero.
+    """
+    if p99 == p1:
+        return np.zeros_like(img)
+    out = np.clip(img, p1, p99)
+    out = (out - p1) / (p99 - p1)
+    return out
+
+
+def compute_dataset_norm_stats(
+    image_folder: str,
+    filenames: list,
+    channels: list,
+    lo: float = 1.0,
+    hi: float = 99.0,
+    file_type: FileType = "czi",
+) -> NormStats:
+    """Compute per-channel percentile bounds over the **whole dataset**.
+
+    Loads every file listed in *filenames*, reads the requested *channels*,
+    pools all pixel values per channel, then returns the ``lo``/``hi``
+    percentile pair for each channel.
+
+    Parameters
+    ----------
+    image_folder:
+        Directory containing the image files.
+    filenames:
+        Ordered list of image basenames (as returned by
+        :func:`list_image_files`).
+    channels:
+        List of integer channel indices to compute stats for
+        (e.g. ``[0, 1, 2, 3]``).
+    lo, hi:
+        Percentile values (0–100). Defaults: 1 and 99.
+    file_type:
+        ``"czi"`` – load via *czifile*; values divided by ``255 × 255``.
+        ``"npy"`` – load via ``np.load``; values used as-is.
+
+    Returns
+    -------
+    NormStats
+        ``{channel_index: (p_lo, p_hi), ...}``
+    """
+    pixel_pools: Dict[int, list] = {ch: [] for ch in channels}
+
+    for filename in filenames:
+        raw = _load_raw_squeezed(image_folder, filename, file_type)
+        for ch in channels:
+            ch_data = _extract_channel(raw, ch, filename, file_type)
+            pixel_pools[ch].append(ch_data.ravel())
+
+    norm_stats: NormStats = {}
+    for ch in channels:
+        all_pixels = np.concatenate(pixel_pools[ch])
+        norm_stats[ch] = (
+            float(np.percentile(all_pixels, lo)),
+            float(np.percentile(all_pixels, hi)),
+        )
+
+    return norm_stats
+
+
+def normalize_image(
+    img: np.ndarray,
+    channel: int,
+    norm_mode: NormMode,
+    norm_stats: Optional[NormStats] = None,
+    lo: float = 1.0,
+    hi: float = 99.0,
+) -> np.ndarray:
+    """Apply the chosen normalization to a single 2-D channel image.
+
+    Parameters
+    ----------
+    img:
+        2-D float array already divided by ``255 * 255``.
+    channel:
+        Channel index – used to look up pre-computed stats in *norm_stats*.
+    norm_mode:
+        ``"dataset"``  → use *norm_stats* (must be provided).
+        ``"image"``    → compute percentiles on-the-fly from *img*.
+        ``None``       → return *img* unchanged.
+    norm_stats:
+        Required when ``norm_mode == "dataset"``.
+    lo, hi:
+        Percentile bounds used for ``"image"`` mode. Ignored for ``"dataset"``
+        mode (bounds were fixed at :func:`compute_dataset_norm_stats` call
+        time).
+
+    Returns
+    -------
+    np.ndarray
+        Normalised (or unchanged) image.
+    """
+    if norm_mode is None:
+        return img
+
+    if norm_mode == "dataset":
+        if norm_stats is None:
+            raise ValueError(
+                "norm_stats must be provided when norm_mode='dataset'."
+            )
+        if channel not in norm_stats:
+            raise KeyError(
+                f"Channel {channel} not found in norm_stats "
+                f"(available: {list(norm_stats.keys())})."
+            )
+        p1, p99 = norm_stats[channel]
+        return _percentile_stretch(img, p1, p99)
+
+    if norm_mode == "image":
+        p1  = float(np.percentile(img, lo))
+        p99 = float(np.percentile(img, hi))
+        return _percentile_stretch(img, p1, p99)
+
+    raise ValueError(
+        f"Unknown norm_mode {norm_mode!r}. Choose 'dataset', 'image', or None."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Loading
+# ---------------------------------------------------------------------------
+
+def load_and_pad(
+    image_folder: str,
+    cell_mask_folder: str,
+    filename: str,
+    major_ch: int,
+    pad_size: int = 64,
+    img_pad_val: Optional[float] = None,
+    norm_mode: NormMode = None,
+    norm_stats: Optional[NormStats] = None,
+    norm_lo: float = 1.0,
+    norm_hi: float = 99.0,
+    file_type: FileType = "czi",
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Load an image + cell-mask .tif, optionally normalize, then pad both.
+
+    Parameters
+    ----------
+    image_folder:
+        Directory containing the raw image files.
+    cell_mask_folder:
+        Directory containing cell-mask .tif files.
+        Expected naming: ``cell_mask_<filename>.tif``.
+    filename:
+        Basename of the image file (e.g. ``"myfile.czi"`` or ``"myfile.npy"``).
+    major_ch:
+        Channel index to extract (0-based).
+    pad_size:
+        Pixels of constant padding added to each edge. Default ``64``.
+    img_pad_val:
+        Constant used to pad the image. Defaults to the image mean.
+    norm_mode:
+        Normalization strategy:
+        ``None``        – no normalization.
+                          .czi: raw ``/ 255²`` scaling applied.
+                          .npy: values used as-is.
+        ``"dataset"``   – whole-dataset 1 %–99 % stretch (requires
+                          *norm_stats* from :func:`compute_dataset_norm_stats`).
+        ``"image"``     – per-image 1 %–99 % stretch computed on the fly.
+    norm_stats:
+        Pre-computed ``{channel: (p1, p99)}`` dict. Required when
+        ``norm_mode='dataset'``, ignored otherwise.
+    norm_lo, norm_hi:
+        Percentile bounds for ``"image"`` mode. Defaults: 1 and 99.
+    file_type:
+        ``"czi"`` – load via *czifile* (default).
+        ``"npy"`` – load via ``np.load``.
+
+    Returns
+    -------
+    img : np.ndarray
+        Padded (and optionally normalized) float image.
+    seg : np.ndarray
+        Padded segmentation mask (float).
+    """
+    # --- raw load (file-type aware) ---
+    raw = _load_raw_squeezed(image_folder, filename, file_type)
+    img = _extract_channel(raw, major_ch, filename, file_type)
+
+    seg = tifffile.imread(
+        os.path.join(cell_mask_folder, "cell_mask_" + filename + ".tif")
+    ).squeeze().astype(float)
+
+    # --- normalization ---
+    img = normalize_image(
+        img,
+        channel=major_ch,
+        norm_mode=norm_mode,
+        norm_stats=norm_stats,
+        lo=norm_lo,
+        hi=norm_hi,
+    )
+
+    # --- padding ---
     if img_pad_val is None:
         img_pad_val = float(np.mean(img))
 
     img = image_padding(img, pad_size, img_pad_val)
     seg = image_padding(seg, pad_size, 0)
+
     return img, seg
 
-def init_debug_fig(train_img, train_seg, dpi=256):
-    fig, ax = plt.subplots(1, 2, figsize=(15.6, 7.8), dpi=dpi, facecolor='w', edgecolor='k')
+
+# ---------------------------------------------------------------------------
+# Debug figure
+# ---------------------------------------------------------------------------
+
+def init_debug_fig(
+    train_img: np.ndarray,
+    train_seg: np.ndarray,
+    dpi: int = 256,
+):
+    fig, ax = plt.subplots(
+        1, 2, figsize=(15.6, 7.8), dpi=dpi, facecolor="w", edgecolor="k"
+    )
     ax[0].imshow(train_img, cmap=plt.cm.gray, vmax=1, vmin=0)
     ax[1].imshow(train_seg, cmap=plt.cm.gray, vmax=1, vmin=0)
     return fig, ax
 
-def compute_grid(train_img_shape, patch_size, offset_frac_x=0.0, offset_frac_y=0.0):
-    """Return x_num, y_num and starting x_0, y_0 for centered grid."""
+
+# ---------------------------------------------------------------------------
+# Grid helpers
+# ---------------------------------------------------------------------------
+
+def compute_grid(
+    train_img_shape: Tuple[int, int],
+    patch_size: int,
+    offset_frac_x: float = 0.0,
+    offset_frac_y: float = 0.0,
+) -> Tuple[int, int, int, int]:
+    """Return ``(x_num, y_num, x_0, y_0)`` for a centred regular grid."""
     H, W = train_img_shape
     x_num = int(np.floor(W / patch_size))
     y_num = int(np.floor(H / patch_size))
-
     x_0 = int((W - x_num * patch_size) / 2 + offset_frac_x * patch_size)
     y_0 = int((H - y_num * patch_size) / 2 + offset_frac_y * patch_size)
     return x_num, y_num, x_0, y_0
 
-def iter_grid_centers(x_num, y_num, x_0, y_0, patch_size):
-    """Yield (x_i, y_i, x_c, y_c) grid centers."""
+
+def iter_grid_centers(
+    x_num: int, y_num: int,
+    x_0: int, y_0: int,
+    patch_size: int,
+):
+    """Yield ``(x_i, y_i, x_c, y_c)`` for every grid position."""
     for x_i in range(x_num):
-        for y_i in range(y_num):  # NOTE: y_num (not x_num)
+        for y_i in range(y_num):
             y_c = int(y_0 + (y_i - 0.5) * patch_size)
             x_c = int(x_0 + (x_i - 0.5) * patch_size)
             yield x_i, y_i, x_c, y_c
 
-def extract_big_patch(train_img, train_seg, x_c, y_c, double_ps):
-    """Extract a big square patch centered at (x_c,y_c) with side 2*double_ps."""
-    y_left = y_c - double_ps
-    x_left = x_c - double_ps
+
+# ---------------------------------------------------------------------------
+# Patch extraction helpers
+# ---------------------------------------------------------------------------
+
+def extract_big_patch(
+    train_img: np.ndarray,
+    train_seg: np.ndarray,
+    x_c: int,
+    y_c: int,
+    double_ps: int,
+) -> Optional[Tuple[np.ndarray, np.ndarray, int, int]]:
+    """Extract a ``(2*double_ps) × (2*double_ps)`` patch centred at (x_c, y_c).
+
+    Returns ``None`` if the patch would exceed image bounds.
+    """
+    y_left  = y_c - double_ps
+    x_left  = x_c - double_ps
     y_right = y_c + double_ps
     x_right = x_c + double_ps
 
-    if y_left < 0 or x_left < 0 or y_right >= train_img.shape[0] or x_right >= train_img.shape[1]:
+    if (
+        y_left < 0 or x_left < 0
+        or y_right >= train_img.shape[0]
+        or x_right >= train_img.shape[1]
+    ):
         return None
 
     patch_img = train_img[y_left:y_right, x_left:x_right]
     patch_seg = train_seg[y_left:y_right, x_left:x_right]
     return patch_img, patch_seg, x_left, y_left
 
-def apply_optional_translation(rand_trans_flag, max_shift_px=0):
-    """Return (rand_tx, rand_ty). With flag=0 -> (0,0)."""
+
+def apply_optional_translation(
+    rand_trans_flag: bool,
+    max_shift_px: int = 0,
+) -> Tuple[int, int]:
+    """Return ``(rand_tx, rand_ty)``. Both are 0 when *rand_trans_flag* is False."""
     if rand_trans_flag:
         rand_tx = random.randint(-max_shift_px, max_shift_px)
         rand_ty = random.randint(-max_shift_px, max_shift_px)
@@ -89,8 +526,16 @@ def apply_optional_translation(rand_trans_flag, max_shift_px=0):
         rand_tx, rand_ty = 0, 0
     return rand_tx, rand_ty
 
-def first_crop_from_big(patch_img, patch_seg, patch_size, double_ps, rand_tx, rand_ty):
-    """Crop a big_crop (still larger than final) from the big patch, with optional translation."""
+
+def first_crop_from_big(
+    patch_img: np.ndarray,
+    patch_seg: np.ndarray,
+    patch_size: int,
+    double_ps: int,
+    rand_tx: int,
+    rand_ty: int,
+):
+    """Crop a region (still larger than the final patch) with optional translation."""
     cx_left_1  = patch_size - rand_tx
     cx_right_1 = double_ps + patch_size - rand_tx
     cy_up_1    = patch_size - rand_ty
@@ -99,14 +544,19 @@ def first_crop_from_big(patch_img, patch_seg, patch_size, double_ps, rand_tx, ra
     big_crop_img = patch_img[cy_up_1:cy_down_1, cx_left_1:cx_right_1]
     big_crop_seg = patch_seg[cy_up_1:cy_down_1, cx_left_1:cx_right_1]
 
-    # corners of this crop in *original full-image coordinates* (still before rotation)
     first_crop_x = np.array([cx_left_1, cx_left_1, cx_right_1, cx_right_1, cx_left_1])
-    first_crop_y = np.array([cy_up_1,  cy_down_1, cy_down_1,  cy_up_1,   cy_up_1])
+    first_crop_y = np.array([cy_up_1,   cy_down_1, cy_down_1,  cy_up_1,    cy_up_1])
 
     return big_crop_img, big_crop_seg, (cx_left_1, cy_up_1), first_crop_x, first_crop_y
 
-def apply_optional_rotation(big_crop_img, big_crop_seg, rand_rota_flag, max_angle_deg=0.0):
-    """Rotate both image and seg by same angle. With flag=0 -> no-op."""
+
+def apply_optional_rotation(
+    big_crop_img: np.ndarray,
+    big_crop_seg: np.ndarray,
+    rand_rota_flag: bool,
+    max_angle_deg: float = 0.0,
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """Rotate image and seg by the same angle. No-op when *rand_rota_flag* is False."""
     if rand_rota_flag:
         rand_angle = (random.random() * 2 - 1) * max_angle_deg
     else:
@@ -115,60 +565,101 @@ def apply_optional_rotation(big_crop_img, big_crop_seg, rand_rota_flag, max_angl
     if rand_angle == 0:
         return big_crop_img, big_crop_seg, rand_angle
 
-    rot_img = transform.rotate(big_crop_img, rand_angle, resize=False, mode='constant', cval=0, clip=True)
-    rot_seg = transform.rotate(big_crop_seg, rand_angle, resize=False, mode='constant', cval=0, clip=True)
+    rot_img = transform.rotate(
+        big_crop_img, rand_angle, resize=False, mode="constant", cval=0, clip=True
+    )
+    rot_seg = transform.rotate(
+        big_crop_seg, rand_angle, resize=False, mode="constant", cval=0, clip=True
+    )
     return rot_img, rot_seg, rand_angle
 
-def center_crop(rot_img, rot_seg, patch_size, half_ps):
-    """Take final patch_size crop from center region of rotated big crop."""
+
+def center_crop(
+    rot_img: np.ndarray,
+    rot_seg: np.ndarray,
+    patch_size: int,
+    half_ps: int,
+) -> Tuple[np.ndarray, np.ndarray, Tuple[int, int]]:
+    """Take the final *patch_size* crop from the centre of the rotated big crop."""
     cx_left_2  = half_ps
     cx_right_2 = patch_size + half_ps
     cy_up_2    = half_ps
     cy_down_2  = patch_size + half_ps
+
     crop_img = rot_img[cy_up_2:cy_down_2, cx_left_2:cx_right_2]
     crop_seg = rot_seg[cy_up_2:cy_down_2, cx_left_2:cx_right_2]
     return crop_img, crop_seg, (cx_left_2, cy_up_2)
 
-def compute_final_polygon_in_full_image(patch_size, rand_angle,
-                                       cx_left_2, cy_up_2,
-                                       x_left, y_left,
-                                       cx_left_1, cy_up_1):
-    """Compute the polygon (in full-image coords) of the final crop after inverse-rotation."""
+
+def compute_final_polygon_in_full_image(
+    patch_size: int,
+    rand_angle: float,
+    cx_left_2: int,
+    cy_up_2: int,
+    x_left: int,
+    y_left: int,
+    cx_left_1: int,
+    cy_up_1: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Return polygon corners (in full-image coords) of the final crop after inverse-rotation."""
     X = np.array([cx_left_2, cx_left_2, cx_left_2 + patch_size, cx_left_2 + patch_size, cx_left_2])
     Y = np.array([cy_up_2,   cy_up_2 + patch_size, cy_up_2 + patch_size, cy_up_2,         cy_up_2])
 
-    # rotate_coor expected signature: rotate_coor(X, Y, cx, cy, angle)
     X_inv, Y_inv = rotate_coor(X, Y, patch_size, patch_size, -rand_angle)
 
-    # move from rotated-crop coords back to full-image coords
     X_full = X_inv + x_left + cx_left_1
     Y_full = Y_inv + y_left + cy_up_1
     return X_full, Y_full
 
-def save_patch(movie_partitioned_data_dir, crop_img_filename, crop_patch_img):
+
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
+
+def save_patch(
+    movie_partitioned_data_dir: str,
+    crop_img_filename: str,
+    crop_patch_img: np.ndarray,
+) -> None:
     tifffile.imwrite(
         os.path.join(movie_partitioned_data_dir, crop_img_filename),
         crop_patch_img.astype(np.float32),
         imagej=True,
-        metadata={'axes': 'YX'}
+        metadata={"axes": "YX"},
     )
 
-def make_record_row(image_folder, filename, filenameID, x_c, y_c,
-                    rand_angle, rand_tx, rand_ty,
-                    X_full, Y_full,
-                    movie_partitioned_data_dir, crop_img_filename,
-                    movie_plot_dir, plot_filename):
+
+def make_record_row(
+    image_folder: str,
+    filename: str,
+    filenameID: int,
+    x_c: int,
+    y_c: int,
+    rand_angle: float,
+    rand_tx: int,
+    rand_ty: int,
+    X_full: np.ndarray,
+    Y_full: np.ndarray,
+    movie_partitioned_data_dir: str,
+    crop_img_filename: str,
+    movie_plot_dir: str,
+    plot_filename: str,
+) -> pd.Series:
     return pd.Series(
         [
-            image_folder, filename, filenameID, x_c, y_c, rand_angle, rand_tx, rand_ty,
+            image_folder, filename, filenameID, x_c, y_c,
+            rand_angle, rand_tx, rand_ty,
             X_full[0], X_full[1], X_full[2], X_full[3],
             Y_full[0], Y_full[1], Y_full[2], Y_full[3],
-            movie_partitioned_data_dir, crop_img_filename, movie_plot_dir, plot_filename
+            movie_partitioned_data_dir, crop_img_filename,
+            movie_plot_dir, plot_filename,
         ],
         index=[
-            'image_folder','filename','filenameID','x_c','y_c','rand_angle','rand_tx','rand_ty',
-            'x_corner1','x_corner2','x_corner3','x_corner4',
-            'y_corner1','y_corner2','y_corner3','y_corner4',
-            'movie_partitioned_data_dir','crop_img_filename','movie_plot_dir','plot_filename'
-        ]
+            "image_folder", "filename", "filenameID", "x_c", "y_c",
+            "rand_angle", "rand_tx", "rand_ty",
+            "x_corner1", "x_corner2", "x_corner3", "x_corner4",
+            "y_corner1", "y_corner2", "y_corner3", "y_corner4",
+            "movie_partitioned_data_dir", "crop_img_filename",
+            "movie_plot_dir", "plot_filename",
+        ],
     )
