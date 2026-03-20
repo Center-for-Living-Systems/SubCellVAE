@@ -1,0 +1,87 @@
+# =============================================================================
+# Patch-prep pipeline configuration
+# Experiment : FA_ML_Annabel_20250217 / 031125  –  shared NPY data, no norm
+# File type  : .npy  (ims-as-npy-preprocessed-no-binning, 90 files)
+# Norm mode  : none
+# Seg mode   : auto (on_the_fly – cell_mask_folder is null)
+# Generated  : 2026-03-18
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Paths  (Windows paths; forward slashes work on both Windows and WSL/Linux)
+# ---------------------------------------------------------------------------
+paths:
+  image_folder      : "/mnt/d/lding/FA/data/FA_ML_Annabel_20250217/031125data/Shared Data/ims-as-npy-preprocessed-no-binning"
+  cell_mask_folder  : null   # null or empty folder → on-the-fly segmentation
+  patch_output_dir  : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/shared_ch1_major/shared_ch1_patches_gridonly_wholecell_pslocation00/tiff_patches32_40p"
+  plot_output_dir   : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/shared_ch1_major/shared_ch1_patches_gridonly_wholecell_pslocation00/plot_patches32_40p"
+
+# ---------------------------------------------------------------------------
+# Experiment identity
+# ---------------------------------------------------------------------------
+experiment:
+  condition : "shared"   # label used in CSV filenames and log output
+  major_ch  : 1          # channel index to extract for the image patch (0-based)
+
+# ---------------------------------------------------------------------------
+# Input file type
+# ---------------------------------------------------------------------------
+input:
+  file_type : "npy"      # "npy" | "czi"
+  start_ind : 0          # first file index to process (inclusive)
+  end_ind   : 90         # last file index to process (exclusive); 90 = all files
+
+# ---------------------------------------------------------------------------
+# Patch geometry
+# ---------------------------------------------------------------------------
+patch:
+  patch_size   : 32      # side length (px) of the final square patch
+  mask_ratio   : 0.4     # minimum mean mask coverage to keep a patch
+  pad_size     : 64      # constant padding added to each image edge before gridding
+  patch_prefix : ""      # prepended to patch filenames; leave empty to disable
+
+# ---------------------------------------------------------------------------
+# Normalization  –  disabled
+# ---------------------------------------------------------------------------
+normalization:
+  norm_mode     : null   # null = no normalization  |  "image"  |  "dataset"
+  norm_channels : null   # only used when norm_mode = "dataset"
+  norm_lo       : 1.0    # lower percentile bound (ignored when norm_mode = null)
+  norm_hi       : 99.0   # upper percentile bound (ignored when norm_mode = null)
+
+# ---------------------------------------------------------------------------
+# Segmentation
+# ---------------------------------------------------------------------------
+segmentation:
+  seg_ch               : 1             # channel used as input to the segmenter
+                                       # (null → falls back to major_ch)
+  #
+  # Tuning parameters for segment_cell_mask():
+  #   seg_threshold        – binarization cutoff after 1%–99% normalization
+  #   seg_close_size       – closing disk radius (px); larger → fills bigger gaps
+  #   seg_min_size_initial – remove specks smaller than this (px²) before closing
+  #   seg_min_size_post_close – remove fragments smaller than this after closing
+  #   seg_min_size_final   – keep only whole-cell bodies (px²); adjust to cell size
+  #
+  seg_threshold        : 0.2
+  seg_close_size       : 5
+  seg_min_size_initial : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final   : 30000
+
+# ---------------------------------------------------------------------------
+# Augmentation  –  all off for a clean grid-only run
+# ---------------------------------------------------------------------------
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+misc:
+  dpi       : 256        # DPI for accumulation-plot PNG files
+  debug     : false      # true = stop after 1st grid position per file
+  log_level : "INFO"     # DEBUG | INFO | WARNING | ERROR

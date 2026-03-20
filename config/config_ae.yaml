@@ -1,0 +1,111 @@
+# =============================================================================
+# Autoencoder training pipeline configuration
+# Model type  : ae  (standard convolutional autoencoder)
+# Edit model.model_type to switch to: vae | semisup | contrastive
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Data  –  list every patch directory you want to train on.
+#
+# Each entry requires:
+#   path           : absolute path to a directory of .tif patch files
+#   condition      : integer ID for the experimental condition (0=control, 1=ycomp, …)
+#   condition_name : human-readable name used in logs (optional)
+#
+# Note: per-patch FA-type labels come from the annotation file below, not here.
+# ---------------------------------------------------------------------------
+data:
+  patch_dirs:
+    - path           : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_control_20260318_2318"
+      condition      : 0
+      condition_name : "control"
+    - path           : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_ycomp_20260318_2325"
+      condition      : 1
+      condition_name : "ycomp"
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output:
+  result_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup"
+  # Checkpoints, loss curve PNGs, and model_final.pt are written here.
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+model:
+  model_type   : "semisup"    # "ae" | "vae" | "semisup" | "contrastive"
+
+  # Shared architecture
+  latent_dim   : 8       # bottleneck dimension
+  input_ps     : 32      # spatial size of square input patch (px)
+  no_ch        : 1       # number of input channels
+  BN_flag      : false   # BatchNorm2d in conv layers
+  dropout_flag : false   # Dropout(0.3) in FC layers
+
+  # -- VAE-specific (only used when model_type = "vae") --------------------
+  # out_activation : "sigmoid"   # "sigmoid" | "identity"
+  # beta           : 1.0         # KL weight; beta=1 → standard VAE, beta>1 → beta-VAE
+  # beta_anneal    : false        # linearly warm up beta from 0 → beta (avoids collapse)
+  # recon_type     : "mse"        # "mse" | "bce"
+
+  # -- SemiSup-specific (only used when model_type = "semisup") ------------
+  num_classes  : 5             # inferred automatically from annotation; override if needed
+  lambda_recon : 1.0           # weight on the reconstruction term
+  lambda_cls   : 1.0           # weight on the classification term
+
+  # -- Contrastive-specific (only used when model_type = "contrastive") ----
+  # proj_dim        : 64         # projection-head output dim for NT-Xent loss
+  # noise_prob      : 0.05       # salt-and-pepper corruption probability
+  # temperature     : 0.5        # NT-Xent softmax temperature
+  # lambda_contrast : 0.5        # weight on the contrastive term
+
+# ---------------------------------------------------------------------------
+# Annotation  –  required for model_type = "semisup"
+#
+# The annotation file (CSV or Excel) must have:
+#   - a filename column (filename_col) matching patch basenames
+#   - one or more label columns (Classification, position, etc.)
+#
+# Two labels are supported; run once per label column (one config per run).
+# Patches not found in the annotation file are treated as unlabelled (label=-1).
+# ---------------------------------------------------------------------------
+
+annotation:
+  annotation_file : "/mnt/d/lding/FA/analysis_results/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"   # CSV or .xlsx
+  label_col       : "classification"               # or "position"
+  filename_col    : "unique_ID"                    # column that holds patch basenames
+  label_order     :                                # defines class 0, 1, 2, ...
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+  # If label_order is omitted (null), classes are sorted alphabetically.
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+training:
+  epochs         : 200     # total training epochs
+  lr             : 0.001   # Adam learning rate
+  batch_size     : 128     # mini-batch size
+  val_split      : 0.2     # fraction of data held out for validation
+  loss_norm_flag : false   # use signal-power-normalised MSE (AE only)
+  group_split    : true    # keep all patches from the same image in the same split
+
+# ---------------------------------------------------------------------------
+# Reconstruction output
+# ---------------------------------------------------------------------------
+reconstruction:
+  save_recon      : true  # write patch tifs, whole-image tifs, and comparison PNGs
+  recon_pad_size  : 64    # padding used during patch extraction (px); used to
+                          # convert padded coordinates → original image coordinates
+  recon_image_size: 1024  # fixed canvas size (px) for whole-image tifs and PNGs
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+misc:
+  device    : "auto"   # "auto" (use CUDA if available) | "cuda" | "cpu"
+  log_level : "INFO"   # DEBUG | INFO | WARNING | ERROR

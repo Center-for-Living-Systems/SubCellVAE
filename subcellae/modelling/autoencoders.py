@@ -575,7 +575,8 @@ def train_semisup_ae(
         tl = tr = tc = 0.0
         for batch in train_loader:
             x      = batch[0].to(device)
-            labels = batch[1].to(device)   # may contain -1
+            # batch[1] = condition, batch[2] = annotation_label (-1 = unlabelled)
+            labels = batch[2].to(device) if len(batch) > 2 else batch[1].to(device)
 
             recon, _, logits = model(x)
             loss, rl, cl = semisup_ae_loss(
@@ -595,7 +596,7 @@ def train_semisup_ae(
         with torch.no_grad():
             for batch in val_loader:
                 x      = batch[0].to(device)
-                labels = batch[1].to(device)
+                labels = batch[2].to(device) if len(batch) > 2 else batch[1].to(device)
 
                 recon, _, logits = model(x)
                 loss, rl, cl = semisup_ae_loss(

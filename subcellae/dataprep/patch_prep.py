@@ -34,6 +34,17 @@ and **before** padding:
 Pass ``norm_mode=None`` (default) to skip normalization entirely.  For .czi
 files without normalization the original ``/ (255 × 255)`` scaling is still
 applied.  For .npy files without normalization values are used unchanged.
+
+Segmentation options
+--------------------
+Segmentation in ``load_and_pad`` is automatic:
+
+* If *cell_mask_folder* is provided **and** the directory is non-empty, a
+  pre-computed mask .tif is read from that folder
+  (naming: ``cell_mask_<filename>.tif``).
+* Otherwise (folder is ``None`` or empty) :func:`segment_cell_mask` is called
+  on a chosen channel of the loaded image at run-time.
+  Controlled by ``seg_ch``, ``seg_threshold``, and ``seg_close_size``.
 """
 
 import math
@@ -45,8 +56,13 @@ import czifile
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import scipy.ndimage as ndi
 import tifffile
 from skimage import transform
+from skimage.measure import label, regionprops
+from skimage.morphology import (
+    binary_closing, binary_opening, disk, remove_small_objects,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +75,8 @@ NormStats = Dict[int, Tuple[float, float]]
 NormMode = Optional[Literal["dataset", "image"]]
 
 FileType = Literal["czi", "npy"]
+
+SegMode = Literal["file", "on_the_fly"]
 
 _EXT_MAP: Dict[str, str] = {
     "czi": ".czi",
@@ -348,12 +366,140 @@ def normalize_image(
 
 
 # ---------------------------------------------------------------------------
+# On-the-fly segmentation
+# ---------------------------------------------------------------------------
+
+def segment_cell_mask(
+    cellmask_img: np.ndarray,
+    threshold: float = 0.2,
+    close_size: int = 5,
+    min_size_initial: int = 3,
+    min_size_post_close: int = 10,
+    min_size_final: int = 30000,
+) -> np.ndarray:
+    """Segment a cell-body mask from a single 2-D intensity image.
+
+    The pipeline mirrors the original ``target_cell_mask_seg`` class method,
+    extracted as a pure function with all previously hard-coded / instance
+    parameters exposed as arguments.
+
+    Steps
+    -----
+    1. If the input is not already in [0, 1], apply a per-image 1 %–99 %
+       percentile stretch; otherwise use the values as-is.
+    2. Threshold at *threshold*.
+    3. Remove small objects (< *min_size_initial* px).
+    4. Binary closing with a disk of radius *close_size*.
+    5. Remove small objects (< *min_size_post_close* px).
+    6. Binary opening with a disk of radius 3.
+    7. Fill holes.
+    8. Remove objects smaller than *min_size_final* px (keeps whole-cell blobs).
+    9. If more than one connected component remains, keep the one closest to
+       the image centre; also keep the second-closest if it does not touch any
+       image border.
+
+    Parameters
+    ----------
+    cellmask_img:
+        2-D float array. If values are outside [0, 1], a per-image 1 %–99 %
+        percentile stretch is applied; already-normalized data is used as-is.
+    threshold:
+        Binarization threshold applied after 1 %–99 % normalization.
+        Default ``0.2``.
+    close_size:
+        Radius (px) of the disk structuring element used in binary closing.
+        Default ``5``.
+    min_size_initial:
+        Minimum object size (px²) after initial thresholding. Default ``3``.
+    min_size_post_close:
+        Minimum object size (px²) after closing. Default ``10``.
+    min_size_final:
+        Minimum object size (px²) after hole-filling; removes small debris and
+        keeps only whole-cell bodies. Default ``30000``.
+
+    Returns
+    -------
+    np.ndarray
+        Integer label image (same shape as *cellmask_img*). Background = 0;
+        retained cell regions carry their original label values (≥ 1).
+    """
+    # --- step 1: normalize to [0, 1] only if data is not already in [0, 1] ---
+    img_float = cellmask_img.astype(float)
+    if img_float.min() >= 0.0 and img_float.max() <= 1.0:
+        normalized = img_float
+    else:
+        normalized = _percentile_stretch(
+            img_float,
+            p1=float(np.percentile(img_float, 1)),
+            p99=float(np.percentile(img_float, 99)),
+        )
+
+    # --- step 2: threshold ---
+    mask = normalized > threshold
+
+    # --- step 3: remove tiny specks ---
+    mask = remove_small_objects(mask, min_size=min_size_initial, connectivity=1)
+
+    # --- step 4: close gaps ---
+    mask = binary_closing(mask, disk(close_size))
+
+    # --- step 5: remove small post-close fragments ---
+    mask = remove_small_objects(mask, min_size=min_size_post_close, connectivity=1)
+
+    # --- step 6: open (remove thin protrusions) ---
+    mask = binary_opening(mask, disk(3))
+
+    # --- step 7: fill holes ---
+    mask = ndi.binary_fill_holes(mask)
+
+    # --- step 8: remove sub-cellular debris, keep whole-cell bodies ---
+    mask = remove_small_objects(mask, min_size=min_size_final, connectivity=1)
+
+    # --- step 9: keep centre cell (+ optional second cell if off-border) ---
+    label_img = label(mask)
+    regions = regionprops(label_img)
+
+    if len(regions) <= 1:
+        # zero or one region – nothing to filter
+        return label_img
+
+    H, W = mask.shape
+    cx, cy = H / 2.0, W / 2.0
+
+    # distance of each region centroid from image centre
+    distances = np.array([
+        abs(r.centroid[0] - cx) + abs(r.centroid[1] - cy)
+        for r in regions
+    ])
+
+    # flag regions that touch any image border
+    on_border = np.array([
+        (r.bbox[0] == 0 or r.bbox[1] == 0
+         or r.bbox[2] == H or r.bbox[3] == W)
+        for r in regions
+    ], dtype=bool)
+
+    sort_idx = np.argsort(distances)
+    first_region  = regions[sort_idx[0]]
+    second_region = regions[sort_idx[1]]
+
+    out = np.zeros_like(label_img)
+    out[label_img == first_region.label] = first_region.label
+
+    # include second-closest only if it does not touch the border
+    if not on_border[sort_idx[1]]:
+        out[label_img == second_region.label] = second_region.label
+
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
 
 def load_and_pad(
     image_folder: str,
-    cell_mask_folder: str,
+    cell_mask_folder: Optional[str],
     filename: str,
     major_ch: int,
     pad_size: int = 64,
@@ -363,20 +509,27 @@ def load_and_pad(
     norm_lo: float = 1.0,
     norm_hi: float = 99.0,
     file_type: FileType = "czi",
+    seg_ch: Optional[int] = None,
+    seg_threshold: float = 0.2,
+    seg_close_size: int = 5,
+    seg_min_size_initial: int = 3,
+    seg_min_size_post_close: int = 10,
+    seg_min_size_final: int = 30000,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Load an image + cell-mask .tif, optionally normalize, then pad both.
+    """Load an image + cell mask, optionally normalize, then pad both.
 
     Parameters
     ----------
     image_folder:
         Directory containing the raw image files.
     cell_mask_folder:
-        Directory containing cell-mask .tif files.
-        Expected naming: ``cell_mask_<filename>.tif``.
+        Directory containing pre-computed cell-mask .tif files
+        (naming: ``cell_mask_<filename>.tif``).
+        If ``None`` or the directory is empty, on-the-fly segmentation is used.
     filename:
         Basename of the image file (e.g. ``"myfile.czi"`` or ``"myfile.npy"``).
     major_ch:
-        Channel index to extract (0-based).
+        Channel index to extract for the image patch (0-based).
     pad_size:
         Pixels of constant padding added to each edge. Default ``64``.
     img_pad_val:
@@ -384,10 +537,7 @@ def load_and_pad(
     norm_mode:
         Normalization strategy:
         ``None``        – no normalization.
-                          .czi: raw ``/ 255²`` scaling applied.
-                          .npy: values used as-is.
-        ``"dataset"``   – whole-dataset 1 %–99 % stretch (requires
-                          *norm_stats* from :func:`compute_dataset_norm_stats`).
+        ``"dataset"``   – whole-dataset 1 %–99 % stretch (requires *norm_stats*).
         ``"image"``     – per-image 1 %–99 % stretch computed on the fly.
     norm_stats:
         Pre-computed ``{channel: (p1, p99)}`` dict. Required when
@@ -397,6 +547,19 @@ def load_and_pad(
     file_type:
         ``"czi"`` – load via *czifile* (default).
         ``"npy"`` – load via ``np.load``.
+    seg_ch:
+        Channel index used as input to :func:`segment_cell_mask` for on-the-fly
+        segmentation. Defaults to *major_ch* when ``None``.
+    seg_threshold:
+        Binarization threshold for on-the-fly segmentation. Default ``0.2``.
+    seg_close_size:
+        Closing disk radius (px) for on-the-fly segmentation. Default ``5``.
+    seg_min_size_initial:
+        Minimum object size (px²) after initial thresholding. Default ``3``.
+    seg_min_size_post_close:
+        Minimum object size (px²) after closing. Default ``10``.
+    seg_min_size_final:
+        Minimum object size (px²) to keep whole-cell bodies. Default ``30000``.
 
     Returns
     -------
@@ -409,11 +572,30 @@ def load_and_pad(
     raw = _load_raw_squeezed(image_folder, filename, file_type)
     img = _extract_channel(raw, major_ch, filename, file_type)
 
-    seg = tifffile.imread(
-        os.path.join(cell_mask_folder, "cell_mask_" + filename + ".tif")
-    ).squeeze().astype(float)
+    # --- segmentation mask ---
+    # Use pre-computed mask if folder is given and non-empty; otherwise segment on the fly.
+    _use_file_mask = (
+        cell_mask_folder is not None
+        and os.path.isdir(cell_mask_folder)
+        and any(os.scandir(cell_mask_folder))
+    )
+    if _use_file_mask:
+        seg = tifffile.imread(
+            os.path.join(cell_mask_folder, "cell_mask_" + filename + ".tif")
+        ).squeeze().astype(float)
+    else:
+        _seg_ch = seg_ch if seg_ch is not None else major_ch
+        seg_input = _extract_channel(raw, _seg_ch, filename, file_type)
+        seg = segment_cell_mask(
+            seg_input,
+            threshold=seg_threshold,
+            close_size=seg_close_size,
+            min_size_initial=seg_min_size_initial,
+            min_size_post_close=seg_min_size_post_close,
+            min_size_final=seg_min_size_final,
+        ).astype(float)
 
-    # --- normalization ---
+    # --- normalization (applied to image channel only) ---
     img = normalize_image(
         img,
         channel=major_ch,

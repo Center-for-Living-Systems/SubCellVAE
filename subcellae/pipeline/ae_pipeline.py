@@ -1,0 +1,834 @@
+"""
+ae_pipeline.py
+==============
+Training pipeline for the four autoencoder variants in subcellae.
+
+Provides a single entry-point function `run_ae_pipeline()` that orchestrates:
+  1. Config validation and logging
+  2. Dataset construction from one or more patch directories
+  3. Train / validation split
+  4. DataLoader creation
+  5. Model instantiation
+  6. Training via the appropriate ``train_*`` function
+  7. Final model checkpoint
+
+Supported model types (set via ``AEConfig.model_type``):
+  ``"ae"``          – standard convolutional autoencoder (AE)
+  ``"vae"``         – variational AE / beta-VAE (VAE32)
+  ``"semisup"``     – semi-supervised AE with classification head (SemiSupAE)
+  ``"contrastive"`` – contrastive AE with NT-Xent loss (ContrastiveAE)
+
+All heavy-lifting model code lives in subcellae/modelling/autoencoders.py; this
+module only wires the pieces together.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List
+
+import matplotlib
+matplotlib.use("Agg")          # non-interactive backend – safe for scripts
+import matplotlib.pyplot as plt
+
+import numpy as np
+import pandas as pd
+import tifffile
+import torch
+import torch.nn as nn
+from torch.utils.data import ConcatDataset, DataLoader, Subset, random_split
+
+from subcellae.modelling.dataset import PatchDataset
+from subcellae.modelling.autoencoders import (
+    AE, train_ae,
+    VAE32, train_vae,
+    SemiSupAE, train_semisup_ae,
+    ContrastiveAE, train_contrastive_ae,
+)
+
+log = logging.getLogger(__name__)
+
+_VALID_MODEL_TYPES = {"ae", "vae", "semisup", "contrastive"}
+
+
+# ---------------------------------------------------------------------------
+# Configuration dataclass
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AEConfig:
+    """All tuneable parameters for one autoencoder training run.
+
+    Parameters
+    ----------
+    result_dir : Path
+        Directory where checkpoints, loss curves, and the final model are
+        written.  Created automatically if it does not exist.
+    patch_dirs : list[dict]
+        Each entry must have ``path`` (str), ``condition`` (int, e.g. 0=control),
+        and optionally ``condition_name`` (str).  Per-patch FA-type labels come
+        from the annotation file, not from this field.
+    model_type : str
+        Which model to train: ``"ae"`` | ``"vae"`` | ``"semisup"`` |
+        ``"contrastive"``.
+
+    Model architecture
+    ------------------
+    latent_dim : int
+        Bottleneck dimension.  Default ``8``.
+    input_ps : int
+        Spatial size of the (square) input patch.  Default ``32``.
+    no_ch : int
+        Number of input channels.  Default ``1``.
+    BN_flag : bool
+        Enable BatchNorm2d in conv layers.  Default ``False``.
+    dropout_flag : bool
+        Enable Dropout(0.3) in FC layers.  Default ``False``.
+
+    VAE-specific
+    ------------
+    out_activation : str
+        Output activation for VAE32: ``"sigmoid"`` or ``"identity"``.
+    beta : float
+        KL weight for the VAE ELBO (beta=1 → standard VAE).
+    beta_anneal : bool
+        Linearly warm up beta from 0 → beta over the first half of
+        training (helps avoid posterior collapse).
+    recon_type : str
+        Reconstruction loss: ``"mse"`` or ``"bce"``.
+
+    SemiSup-specific
+    ----------------
+    num_classes : int
+        Number of target classes for the classification head.
+    lambda_recon : float
+        Weight on the reconstruction term.
+    lambda_cls : float
+        Weight on the classification term.
+
+    Contrastive-specific
+    --------------------
+    proj_dim : int
+        Output dimension of the NT-Xent projection head.
+    noise_prob : float
+        Salt-and-pepper corruption probability for the noisy view.
+    temperature : float
+        Temperature for the NT-Xent softmax.
+    lambda_contrast : float
+        Weight on the contrastive term.
+
+    Training
+    --------
+    epochs : int
+        Number of training epochs.  Default ``200``.
+    lr : float
+        Adam learning rate.  Default ``1e-3``.
+    batch_size : int
+        Mini-batch size.  Default ``128``.
+    val_split : float
+        Fraction of data held out for validation.  Default ``0.2``.
+    loss_norm_flag : bool
+        Use normalised MSE (signal-power-normalised) for the AE variant.
+        Ignored by other model types.  Default ``False``.
+
+    Device
+    ------
+    device : str
+        ``"auto"`` selects CUDA if available, else CPU.
+        Pass ``"cuda"`` or ``"cpu"`` to override.
+    """
+
+    # --- required ---
+    result_dir: Path
+    patch_dirs: list      # list of dicts: [{path, condition, condition_name}, ...]
+
+    # --- model selection ---
+    model_type: str = "ae"
+
+    # --- shared architecture ---
+    latent_dim: int   = 8
+    input_ps: int     = 32
+    no_ch: int        = 1
+    BN_flag: bool     = False
+    dropout_flag: bool = False
+
+    # --- VAE-specific ---
+    out_activation: str = "sigmoid"
+    beta: float         = 1.0
+    beta_anneal: bool   = False
+    recon_type: str     = "mse"
+
+    # --- SemiSup-specific ---
+    num_classes: int    = 6
+    lambda_recon: float = 1.0
+    lambda_cls: float   = 1.0
+
+    # --- annotation (SemiSup) ---
+    annotation_file: str  = ""    # path to CSV/Excel with per-patch labels
+    label_col: str        = "Classification"  # column to use as class label
+    filename_col: str     = "crop_img_filename"  # column that holds patch basenames
+    label_order: list     = None  # ordered list of string labels; None → auto alphabetical
+
+    # --- Contrastive-specific ---
+    proj_dim: int          = 64
+    noise_prob: float      = 0.05
+    temperature: float     = 0.5
+    lambda_contrast: float = 0.5
+
+    # --- training ---
+    epochs: int         = 200
+    lr: float           = 1e-3
+    batch_size: int     = 128
+    val_split: float    = 0.2
+    loss_norm_flag: bool = False
+    group_split: bool   = True   # keep all patches from the same image in the same split
+
+    # --- reconstruction output ---
+    save_recon: bool       = True   # whether to write reconstruction images
+    recon_pad_size: int    = 64     # padding used during patch extraction; subtracted
+                                    # to convert padded → original image coordinates
+    recon_image_size: int  = 1024   # fixed canvas height/width (px) for whole-image tifs
+
+    # --- device ---
+    device: str = "auto"
+
+    def __post_init__(self):
+        # Coerce and create result_dir
+        self.result_dir = Path(self.result_dir)
+        self.result_dir.mkdir(parents=True, exist_ok=True)
+
+        # Validate model_type
+        if self.model_type not in _VALID_MODEL_TYPES:
+            raise ValueError(
+                f"model_type must be one of {_VALID_MODEL_TYPES}, "
+                f"got {self.model_type!r}"
+            )
+
+        # Resolve device
+        if self.device == "auto":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+# ---------------------------------------------------------------------------
+# Split helpers
+# ---------------------------------------------------------------------------
+
+def _extract_group_key(path: str) -> str:
+    """Return the image-level group key from a patch filename.
+
+    Filename format: ``{prefix}_f{NNNN}x{xxxx}y{yyyy}ps{pp}.tif``
+    Group key      : ``{prefix}_f{NNNN}``
+
+    Example: ``control_f0001x0592y0560ps32.tif`` → ``control_f0001``
+    Falls back to the full stem if the pattern is not matched.
+    """
+    stem = Path(path).stem   # strip .tif
+    m = re.match(r'^(.+_f\d+)x\d+', stem)
+    return m.group(1) if m else stem
+
+
+def _grouped_train_val_split(
+    datasets: list,
+    val_split: float,
+    seed: int = 42,
+) -> tuple:
+    """Split dataset indices so all patches from the same image stay together.
+
+    Parameters
+    ----------
+    datasets : list
+        Individual dataset objects (each must have a ``paths`` attribute).
+    val_split : float
+        Fraction of *images* (groups) to hold out for validation.
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    train_indices, val_indices : list[int], list[int]
+        Flat indices into the concatenated dataset.
+    """
+    # Collect all paths in concatenated order
+    all_paths = []
+    for ds in datasets:
+        all_paths.extend(getattr(ds, "paths", []))
+
+    # Map group key → list of flat indices
+    group_to_indices: dict = defaultdict(list)
+    for idx, path in enumerate(all_paths):
+        group_to_indices[_extract_group_key(path)].append(idx)
+
+    groups = sorted(group_to_indices.keys())
+    rng = np.random.RandomState(seed)
+    rng.shuffle(groups)
+
+    n_val = max(1, int(len(groups) * val_split))
+    val_groups  = set(groups[:n_val])
+    train_groups = set(groups[n_val:])
+
+    train_indices = [i for g in sorted(train_groups) for i in group_to_indices[g]]
+    val_indices   = [i for g in sorted(val_groups)   for i in group_to_indices[g]]
+    return train_indices, val_indices
+
+
+# ---------------------------------------------------------------------------
+# Coordinate parsing
+# ---------------------------------------------------------------------------
+
+_COORD_RE = re.compile(r'^(.+_f\d+)x(\d+)y(\d+)ps(\d+)')
+
+def _parse_patch_coords(filename: str):
+    """Parse patch coordinates from a filename.
+
+    Filename format: ``{group}_x{xxxx}y{yyyy}ps{pp}.tif``
+    Example: ``control_f0001x0080y0816ps32.tif``
+
+    Returns
+    -------
+    (group, x_c, y_c, ps) : (str, int, int, int)
+        ``group`` is the source-image key (e.g. ``control_f0001``).
+        ``x_c``, ``y_c`` are the patch centre coordinates in padded image space.
+        ``ps`` is the patch side length in pixels.
+    Returns ``None`` if the filename does not match the expected pattern.
+    """
+    stem = Path(filename).stem
+    m = _COORD_RE.match(stem)
+    if m is None:
+        return None
+    return m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
+
+
+# ---------------------------------------------------------------------------
+# Latent extraction and CSV export
+# ---------------------------------------------------------------------------
+
+def _extract_latents(model, loader, device: str, model_type: str) -> dict:
+    """Run inference over *loader* and collect per-patch latents and reconstructions.
+
+    Returns
+    -------
+    dict with keys:
+        ``paths``             – list[str]
+        ``conditions``        – list[int]
+        ``annotation_labels`` – list[int]  (-1 = unlabelled)
+        ``latents``           – np.ndarray (N, latent_dim)
+        ``raws``              – list of np.ndarray (H, W) float32
+        ``recons``            – list of np.ndarray (H, W) float32
+    """
+    model.eval()
+    all_paths, all_conditions, all_ann_labels, all_latents = [], [], [], []
+    all_raws, all_recons = [], []
+
+    with torch.no_grad():
+        for batch in loader:
+            x          = batch[0].to(device)    # (B, C, H, W)
+            conditions = batch[1]               # int tensor
+            ann_labels = batch[2]               # int tensor (-1 = unlabelled)
+            paths      = batch[3]               # list of str
+
+            if model_type == "ae":
+                x_hat, z = model(x)
+            elif model_type == "vae":
+                x_hat, mu, _, _ = model(x)
+                z = mu                          # use mean (deterministic)
+            elif model_type == "semisup":
+                x_hat, z, _ = model(x)
+            else:  # contrastive
+                x_hat, z = model(x)
+
+            all_paths.extend(paths)
+            all_conditions.extend(conditions.tolist())
+            all_ann_labels.extend(ann_labels.tolist())
+            all_latents.append(z.cpu().numpy())
+
+            # Store raw and recon as (H, W) float32 arrays
+            raw_np   = x.cpu().numpy()[:, 0, :, :]     # (B, H, W)
+            recon_np = x_hat.cpu().numpy()[:, 0, :, :] # (B, H, W)
+            for raw_patch, recon_patch in zip(raw_np, recon_np):
+                all_raws.append(raw_patch.astype(np.float32))
+                all_recons.append(recon_patch.astype(np.float32))
+
+    # Per-patch reconstruction metrics
+    all_mse, all_mean_intensity, all_norm_mse = [], [], []
+    for raw_p, recon_p in zip(all_raws, all_recons):
+        mse        = float(np.mean((raw_p - recon_p) ** 2))
+        mean_int   = float(np.mean(raw_p))
+        norm_mse   = mse / mean_int if mean_int > 0 else float("nan")
+        all_mse.append(mse)
+        all_mean_intensity.append(mean_int)
+        all_norm_mse.append(norm_mse)
+
+    return {
+        "paths":             all_paths,
+        "conditions":        all_conditions,
+        "annotation_labels": all_ann_labels,
+        "latents":           np.concatenate(all_latents, axis=0),
+        "raws":              all_raws,
+        "recons":            all_recons,
+        "recon_mse":         all_mse,
+        "mean_intensity":    all_mean_intensity,
+        "norm_mse":          all_norm_mse,
+    }
+
+
+def _save_latent_csv(
+    train_result: dict,
+    val_result: dict,
+    datasets: list,
+    label_order: list,
+    result_dir: Path,
+) -> Path:
+    """Build and save the latent feature CSV.
+
+    Columns
+    -------
+    filename, filepath, condition, condition_name, group,
+    split, z_0 … z_{d-1}, annotation_label, annotation_label_name
+    """
+    # condition → name mapping from loaded datasets
+    cond_to_name = {}
+    for ds in datasets:
+        cond_to_name[ds.condition] = ds.condition_name
+
+    int_to_label = {i: lbl for i, lbl in enumerate(label_order)} if label_order else {}
+
+    rows = []
+    for split_name, result in [("train", train_result), ("val", val_result)]:
+        latents = result["latents"]
+        for i, path in enumerate(result["paths"]):
+            condition  = result["conditions"][i]
+            ann_int    = result["annotation_labels"][i]
+            row = {
+                "filename":            Path(path).name,
+                "filepath":            path,
+                "condition":           condition,
+                "condition_name":      cond_to_name.get(condition, str(condition)),
+                "group":               _extract_group_key(path),
+                "split":               split_name,
+                "recon_mse":           result["recon_mse"][i],
+                "mean_intensity":      result["mean_intensity"][i],
+                "norm_mse":            result["norm_mse"][i],
+                "annotation_label":    ann_int,
+                "annotation_label_name": int_to_label.get(ann_int, ""),
+            }
+            for d, val in enumerate(latents[i]):
+                row[f"z_{d}"] = float(val)
+            rows.append(row)
+
+    # column order: metadata, quality metrics, latent dims, annotation
+    latent_dim = result["latents"].shape[1]
+    latent_cols = [f"z_{d}" for d in range(latent_dim)]
+    meta_cols   = ["filename", "filepath", "condition", "condition_name",
+                   "group", "split"]
+    metric_cols = ["recon_mse", "mean_intensity", "norm_mse"]
+    ann_cols    = ["annotation_label", "annotation_label_name"]
+    df = pd.DataFrame(rows, columns=meta_cols + metric_cols + latent_cols + ann_cols)
+
+    out_path = result_dir / "latents.csv"
+    df.to_csv(out_path, index=False)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# Reconstruction output
+# ---------------------------------------------------------------------------
+
+def _save_reconstructions(
+    train_result: dict,
+    val_result: dict,
+    cfg: "AEConfig",
+) -> None:
+    """Save per-patch and whole-image reconstruction outputs.
+
+    Directory layout under ``cfg.result_dir / "recon"``::
+
+        recon/
+          patches/          # individual patch .tif files
+            train_<name>.tif
+            val_<name>.tif
+          images/           # whole-image canvases
+            raw_<group>.tif
+            recon_<group>.tif
+          visual/           # side-by-side PNG comparisons
+            <group>_comparison.png
+
+    Coordinates are parsed from the patch filename using
+    :func:`_parse_patch_coords`.  ``cfg.recon_pad_size`` is subtracted from
+    the padded coordinates to recover the original image positions.
+
+    Parameters
+    ----------
+    train_result, val_result : dict
+        Output of :func:`_extract_latents` (must include ``"raws"`` and
+        ``"recons"`` keys).
+    cfg : AEConfig
+        Pipeline configuration; uses ``result_dir`` and ``recon_pad_size``.
+    """
+    recon_dir   = cfg.result_dir / "recon"
+    patch_dir   = recon_dir / "patches"
+    image_dir   = recon_dir / "images"
+    visual_dir  = recon_dir / "visual"
+    for d in (patch_dir, image_dir, visual_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    pad = cfg.recon_pad_size
+
+    # ---- 1. save individual patch tifs and collect canvas info ----
+    # canvas_data[group][split] = list of (y0, y1, x0, x1, raw, recon)
+    canvas_data: dict = defaultdict(lambda: defaultdict(list))
+
+    for split_name, result in [("train", train_result), ("val", val_result)]:
+        for i, path in enumerate(result["paths"]):
+            fname   = Path(path).name
+            raw_p   = result["raws"][i]
+            recon_p = result["recons"][i]
+
+            # save individual patch tifs
+            tifffile.imwrite(str(patch_dir / f"raw_{split_name}_{fname}"),   raw_p)
+            tifffile.imwrite(str(patch_dir / f"recon_{split_name}_{fname}"), recon_p)
+
+            # parse coordinates for whole-image canvas
+            coords = _parse_patch_coords(fname)
+            if coords is None:
+                continue  # skip if filename doesn't match pattern
+
+            group, x_c, y_c, ps = coords
+            half = ps // 2
+
+            # original (unpadded) image coordinates
+            r0 = y_c - half - pad
+            r1 = y_c + half - pad
+            c0 = x_c - half - pad
+            c1 = x_c + half - pad
+
+            if r0 < 0 or c0 < 0:
+                log.debug("Skipping canvas placement for %s (negative coords)", fname)
+                continue
+
+            canvas_data[group][split_name].append((r0, r1, c0, c1, raw_p, recon_p))
+
+    # ---- 2. build and save whole-image canvases per group ----
+    img_size = cfg.recon_image_size
+    all_groups = sorted(set(canvas_data.keys()))
+    for group in all_groups:
+        split_entries = canvas_data[group]
+        all_entries = [(r0, r1, c0, c1, raw_p, recon_p, sp)
+                       for sp, entries in split_entries.items()
+                       for (r0, r1, c0, c1, raw_p, recon_p) in entries]
+
+        if not all_entries:
+            continue
+
+        # fixed-size canvas; warn if any patch overflows
+        raw_canvas   = np.zeros((img_size, img_size), dtype=np.float32)
+        recon_canvas = np.zeros((img_size, img_size), dtype=np.float32)
+
+        for r0, r1, c0, c1, raw_p, recon_p, _sp in all_entries:
+            if r1 > img_size or c1 > img_size:
+                log.warning(
+                    "Patch [%d:%d, %d:%d] exceeds recon_image_size=%d for %s – clipping",
+                    r0, r1, c0, c1, img_size, group,
+                )
+                r1 = min(r1, img_size)
+                c1 = min(c1, img_size)
+            raw_canvas[r0:r1, c0:c1]   = raw_p[:r1-r0, :c1-c0]
+            recon_canvas[r0:r1, c0:c1] = recon_p[:r1-r0, :c1-c0]
+
+        tifffile.imwrite(str(image_dir / f"raw_{group}.tif"),   raw_canvas)
+        tifffile.imwrite(str(image_dir / f"recon_{group}.tif"), recon_canvas)
+
+        # determine split label for the suptitle (train / val / train+val)
+        splits_present = sorted(split_entries.keys())
+        split_label = "+".join(splits_present)
+        suptitle = f"{group}  [{split_label}]"
+
+        # ---- 3. side-by-side PNG comparison ----
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        fig.suptitle(suptitle, fontsize=13, fontweight="bold")
+        axes[0].imshow(raw_canvas,   cmap="gray", vmin=0, vmax=1)
+        axes[0].set_title("Raw")
+        axes[0].axis("off")
+        axes[1].imshow(recon_canvas, cmap="gray", vmin=0, vmax=1)
+        axes[1].set_title("Reconstruction")
+        axes[1].axis("off")
+        fig.tight_layout()
+        fig.savefig(str(visual_dir / f"{group}_comparison.png"), dpi=150)
+        plt.close(fig)
+
+    log.info("Reconstruction output saved → %s  (%d source images)",
+             recon_dir, len(all_groups))
+
+
+# ---------------------------------------------------------------------------
+# Public pipeline entry-point
+# ---------------------------------------------------------------------------
+
+def run_ae_pipeline(cfg: AEConfig):
+    """Run the full autoencoder training pipeline.
+
+    Parameters
+    ----------
+    cfg : AEConfig
+        Fully-initialised configuration object.
+
+    Returns
+    -------
+    torch.nn.Module
+        The trained model (already moved back to CPU for safe serialisation).
+    """
+    # ------------------------------------------------------------------
+    # 1. Log config summary
+    # ------------------------------------------------------------------
+    log.info("=" * 60)
+    log.info("Autoencoder Training Pipeline")
+    log.info("  result_dir    : %s", cfg.result_dir)
+    log.info("  model_type    : %s", cfg.model_type)
+    log.info("  patch_dirs    : %d director%s",
+             len(cfg.patch_dirs), "y" if len(cfg.patch_dirs) == 1 else "ies")
+    for entry in cfg.patch_dirs:
+        log.info("    path=%-50s  condition=%s (%s)",
+                 entry.get("path", "?"),
+                 entry.get("condition", entry.get("label", "?")),
+                 entry.get("condition_name", ""))
+    log.info("  latent_dim=%d  input_ps=%d  no_ch=%d  BN=%s  dropout=%s",
+             cfg.latent_dim, cfg.input_ps, cfg.no_ch, cfg.BN_flag, cfg.dropout_flag)
+    log.info("  epochs=%d  lr=%g  batch_size=%d  val_split=%.2f",
+             cfg.epochs, cfg.lr, cfg.batch_size, cfg.val_split)
+    log.info("  device        : %s", cfg.device)
+
+    if cfg.model_type == "vae":
+        log.info("  [VAE] out_activation=%s  beta=%.3f  beta_anneal=%s  recon_type=%s",
+                 cfg.out_activation, cfg.beta, cfg.beta_anneal, cfg.recon_type)
+    elif cfg.model_type == "semisup":
+        log.info("  [SemiSup] num_classes=%d  lambda_recon=%.3f  lambda_cls=%.3f",
+                 cfg.num_classes, cfg.lambda_recon, cfg.lambda_cls)
+    elif cfg.model_type == "contrastive":
+        log.info("  [Contrastive] proj_dim=%d  noise_prob=%.3f  temperature=%.3f  "
+                 "lambda_contrast=%.3f",
+                 cfg.proj_dim, cfg.noise_prob, cfg.temperature, cfg.lambda_contrast)
+
+    log.info("=" * 60)
+
+    # ------------------------------------------------------------------
+    # 2. Build datasets
+    # ------------------------------------------------------------------
+    # Transform: expand (H, W) numpy array → (1, H, W) before the dataset
+    # class wraps it in a torch tensor.  Patches are already float32 in [0, 1].
+    def _channel_expand(x: np.ndarray) -> np.ndarray:
+        return np.expand_dims(x, 0)
+
+    datasets = []
+    for entry in cfg.patch_dirs:
+        path           = entry["path"]
+        condition      = int(entry.get("condition", entry.get("label", 0)))
+        condition_name = str(entry.get("condition_name", str(condition)))
+        ds = PatchDataset(
+            path,
+            condition=condition,
+            condition_name=condition_name,
+            annotation_file=cfg.annotation_file or None,
+            label_col=cfg.label_col,
+            filename_col=cfg.filename_col,
+            label_order=cfg.label_order,
+            transform=_channel_expand,
+        )
+        if cfg.annotation_file and ds.num_classes > 0:
+            cfg.num_classes = ds.num_classes
+            log.info("  Loaded %d patches from %s  condition=%d (%s)  "
+                     "annotation: %d classes via %r",
+                     len(ds), path, condition, condition_name,
+                     ds.num_classes, cfg.label_col)
+            log.info("  Label mapping: %s", ds.label_to_int)
+        else:
+            log.info("  Loaded %d patches from %s  condition=%d (%s)",
+                     len(ds), path, condition, condition_name)
+        datasets.append(ds)
+
+    if not datasets:
+        raise ValueError("patch_dirs is empty; nothing to train on.")
+
+    full_dataset = ConcatDataset(datasets)
+    total = len(full_dataset)
+    log.info("  Total patches: %d", total)
+
+    # ------------------------------------------------------------------
+    # 3. Train / val split
+    # ------------------------------------------------------------------
+    if cfg.group_split:
+        train_indices, val_indices = _grouped_train_val_split(
+            datasets, cfg.val_split
+        )
+        train_ds = Subset(full_dataset, train_indices)
+        val_ds   = Subset(full_dataset, val_indices)
+        all_paths = [p for ds in datasets for p in getattr(ds, "paths", [])]
+        n_train_groups = len({_extract_group_key(all_paths[i]) for i in train_indices})
+        n_val_groups   = len({_extract_group_key(all_paths[i]) for i in val_indices})
+        log.info("  Group-aware split: %d train patches (%d images) / "
+                 "%d val patches (%d images)",
+                 len(train_indices), n_train_groups,
+                 len(val_indices), n_val_groups)
+    else:
+        n_val   = max(1, int(total * cfg.val_split))
+        n_train = total - n_val
+        train_ds, val_ds = random_split(
+            full_dataset, [n_train, n_val],
+            generator=torch.Generator().manual_seed(42),
+        )
+        log.info("  Random split: %d train / %d val", n_train, n_val)
+
+    # ------------------------------------------------------------------
+    # 4. DataLoaders
+    # ------------------------------------------------------------------
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        drop_last=False,
+        num_workers=0,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        drop_last=False,
+        num_workers=0,
+    )
+
+    # ------------------------------------------------------------------
+    # 5. Instantiate model
+    # ------------------------------------------------------------------
+    if cfg.model_type == "ae":
+        model = AE(
+            latent_dim=cfg.latent_dim,
+            input_ps=cfg.input_ps,
+            no_ch=cfg.no_ch,
+            BN_flag=cfg.BN_flag,
+            dropout_flag=cfg.dropout_flag,
+        )
+
+    elif cfg.model_type == "vae":
+        model = VAE32(
+            in_channels=cfg.no_ch,
+            latent_dim=cfg.latent_dim,
+            out_activation=cfg.out_activation,
+        )
+
+    elif cfg.model_type == "semisup":
+        model = SemiSupAE(
+            num_classes=cfg.num_classes,
+            latent_dim=cfg.latent_dim,
+            input_ps=cfg.input_ps,
+            no_ch=cfg.no_ch,
+            BN_flag=cfg.BN_flag,
+            dropout_flag=cfg.dropout_flag,
+        )
+
+    else:  # "contrastive"
+        model = ContrastiveAE(
+            latent_dim=cfg.latent_dim,
+            proj_dim=cfg.proj_dim,
+            input_ps=cfg.input_ps,
+            no_ch=cfg.no_ch,
+            noise_prob=cfg.noise_prob,
+            BN_flag=cfg.BN_flag,
+        )
+
+    model = model.to(cfg.device)
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    log.info("  Model: %s  (%.2fM trainable parameters)",
+             type(model).__name__, n_params / 1e6)
+
+    # ------------------------------------------------------------------
+    # 6. Train
+    # ------------------------------------------------------------------
+    result_dir_str = str(cfg.result_dir)
+
+    if cfg.model_type == "ae":
+        model, _, _ = train_ae(
+            model, train_loader, val_loader,
+            device=cfg.device,
+            epochs=cfg.epochs,
+            lr=cfg.lr,
+            loss_norm_flag=cfg.loss_norm_flag,
+            result_dir=result_dir_str,
+        )
+
+    elif cfg.model_type == "vae":
+        model, _, _ = train_vae(
+            model, train_loader, val_loader,
+            device=cfg.device,
+            epochs=cfg.epochs,
+            lr=cfg.lr,
+            beta=cfg.beta,
+            recon_type=cfg.recon_type,
+            result_dir=result_dir_str,
+            beta_anneal=cfg.beta_anneal,
+        )
+
+    elif cfg.model_type == "semisup":
+        model, _, _ = train_semisup_ae(
+            model, train_loader, val_loader,
+            device=cfg.device,
+            epochs=cfg.epochs,
+            lr=cfg.lr,
+            lambda_recon=cfg.lambda_recon,
+            lambda_cls=cfg.lambda_cls,
+            result_dir=result_dir_str,
+        )
+
+    else:  # "contrastive"
+        model, _, _ = train_contrastive_ae(
+            model, train_loader, val_loader,
+            device=cfg.device,
+            epochs=cfg.epochs,
+            lr=cfg.lr,
+            lambda_recon=cfg.lambda_recon,
+            lambda_contrast=cfg.lambda_contrast,
+            result_dir=result_dir_str,
+            noise_prob=cfg.noise_prob,
+            temperature=cfg.temperature,
+        )
+
+    # ------------------------------------------------------------------
+    # 7. Save final model
+    # ------------------------------------------------------------------
+    final_path = cfg.result_dir / "model_final.pt"
+    torch.save(model, str(final_path))
+    log.info("Final model saved → %s", final_path)
+
+    # ------------------------------------------------------------------
+    # 8. Export latent CSV  (inference over full train + val sets)
+    # ------------------------------------------------------------------
+    log.info("Extracting latents for CSV export …")
+    # Use shuffle=False loaders so row order is deterministic
+    train_loader_ordered = DataLoader(
+        train_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=0
+    )
+    val_loader_ordered = DataLoader(
+        val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=0
+    )
+    train_result = _extract_latents(model, train_loader_ordered, cfg.device, cfg.model_type)
+    val_result   = _extract_latents(model, val_loader_ordered,   cfg.device, cfg.model_type)
+
+    csv_path = _save_latent_csv(
+        train_result, val_result,
+        datasets=datasets,
+        label_order=datasets[0].label_order if datasets else [],
+        result_dir=cfg.result_dir,
+    )
+    log.info("Latent CSV saved → %s  (%d rows)",
+             csv_path, len(train_result["paths"]) + len(val_result["paths"]))
+
+    # ------------------------------------------------------------------
+    # 9. Save reconstruction images
+    # ------------------------------------------------------------------
+    if cfg.save_recon:
+        log.info("Saving reconstruction images …")
+        _save_reconstructions(train_result, val_result, cfg)
+
+    log.info("Pipeline complete.")
+    return model

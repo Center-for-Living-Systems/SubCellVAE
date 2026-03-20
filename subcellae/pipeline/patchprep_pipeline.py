@@ -21,8 +21,8 @@ Normalization modes (set via ``PipelineConfig.norm_mode``):
   ``"image"``    – per-image, per-channel 1 %–99 % percentile stretch computed
                    on the fly for each loaded image.
 
-All heavy-lifting primitives live in utils/patch_prep.py; this module only
-wires them together.
+All heavy-lifting primitives live in subcellae/dataprep/patch_prep.py; this
+module only wires them together.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ matplotlib.use("Agg")          # non-interactive backend – safe for scripts
 import matplotlib.pyplot as plt
 import pandas as pd
 
-import utils.patch_prep as patch_prep
+import subcellae.dataprep.patch_prep as patch_prep
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class PipelineConfig:
 
     # --- required ---
     image_folder: str | Path
-    cell_mask_folder: str | Path
+    cell_mask_folder: Optional[str | Path]   # None is valid for on_the_fly mode
     movie_partitioned_data_dir: str | Path
     movie_plot_dir: str | Path
     condition: str
@@ -118,39 +118,24 @@ class PipelineConfig:
     debug_flag: bool = False
     pad_size: int = 64
     dpi: int = 256
+    patch_prefix: str = ""           # prepended to patch filenames, e.g. "control"
 
     # --- normalization ---
     norm_mode: Optional[str] = None
-    """Normalization strategy applied to each loaded image.
-
-    ``None``       – no normalization (raw ``/ 255²`` scaling).
-    ``"dataset"``  – whole-dataset per-channel 1 %–99 % stretch.
-                     Stats are computed once across all files before the main
-                     loop; ``norm_channels`` must list every channel to include.
-    ``"image"``    – per-image per-channel 1 %–99 % stretch (on the fly).
-    """
-
     norm_channels: Optional[list] = None
-    """Channels to include when computing dataset-level stats.
-
-    Required when ``norm_mode='dataset'``.  Typically the full channel list of
-    the .czi files, e.g. ``[0, 1, 2, 3]``.  If ``None`` and
-    ``norm_mode='dataset'``, only ``major_ch`` is used.
-    """
-
     norm_lo: float = 1.0
-    """Lower percentile bound (default 1.0)."""
-
     norm_hi: float = 99.0
-    """Upper percentile bound (default 99.0)."""
 
     # --- file type ---
     file_type: str = "czi"
-    """Input image file format.
 
-    ``"czi"``  – Zeiss .czi files (loaded via *czifile*; values / 255²).
-    ``"npy"``  – NumPy .npy files (loaded via ``np.load``; values as-is).
-    """
+    # --- segmentation ---
+    seg_ch: Optional[int] = None          # None → falls back to major_ch
+    seg_threshold: float = 0.2
+    seg_close_size: int = 5
+    seg_min_size_initial: int = 3
+    seg_min_size_post_close: int = 10
+    seg_min_size_final: int = 30000
 
     # --- derived (computed in __post_init__) ---
     half_ps: int = field(init=False)
@@ -158,12 +143,14 @@ class PipelineConfig:
 
     def __post_init__(self):
         self.image_folder = Path(self.image_folder)
-        self.cell_mask_folder = Path(self.cell_mask_folder)
         self.movie_partitioned_data_dir = Path(self.movie_partitioned_data_dir)
         self.movie_plot_dir = Path(self.movie_plot_dir)
 
         self.half_ps = self.patch_size // 2
         self.double_ps = self.patch_size * 2
+
+        if self.cell_mask_folder is not None:
+            self.cell_mask_folder = Path(self.cell_mask_folder)
 
         # validate norm_mode
         _valid_norm_modes = {None, "dataset", "image"}
@@ -171,15 +158,7 @@ class PipelineConfig:
             raise ValueError(
                 f"norm_mode must be one of {_valid_norm_modes}, got {self.norm_mode!r}"
             )
-
-        # validate file_type
-        _valid_file_types = {"czi", "npy"}
-        if self.file_type not in _valid_file_types:
-            raise ValueError(
-                f"file_type must be one of {_valid_file_types}, got {self.file_type!r}"
-            )
         if self.norm_mode == "dataset" and self.norm_channels is None:
-            # fall back to major_ch only – warn so the user knows
             import warnings
             warnings.warn(
                 "norm_mode='dataset' but norm_channels is None; "
@@ -188,6 +167,13 @@ class PipelineConfig:
                 stacklevel=2,
             )
             self.norm_channels = [self.major_ch]
+
+        # validate file_type
+        _valid_file_types = {"czi", "npy"}
+        if self.file_type not in _valid_file_types:
+            raise ValueError(
+                f"file_type must be one of {_valid_file_types}, got {self.file_type!r}"
+            )
 
         # ensure output dirs exist
         self.movie_partitioned_data_dir.mkdir(parents=True, exist_ok=True)
@@ -231,7 +217,7 @@ def _process_file(
     # ---- load + normalise + pad ----
     train_img, train_seg = patch_prep.load_and_pad(
         str(cfg.image_folder),
-        str(cfg.cell_mask_folder),
+        str(cfg.cell_mask_folder) if cfg.cell_mask_folder is not None else None,
         filename,
         cfg.major_ch,
         pad_size=cfg.pad_size,
@@ -240,6 +226,12 @@ def _process_file(
         norm_lo=cfg.norm_lo,
         norm_hi=cfg.norm_hi,
         file_type=cfg.file_type,
+        seg_ch=cfg.seg_ch,
+        seg_threshold=cfg.seg_threshold,
+        seg_close_size=cfg.seg_close_size,
+        seg_min_size_initial=cfg.seg_min_size_initial,
+        seg_min_size_post_close=cfg.seg_min_size_post_close,
+        seg_min_size_final=cfg.seg_min_size_final,
     )
 
     # ---- debug figure (accumulation plot) ----
@@ -309,7 +301,9 @@ def _process_file(
             continue
 
         # ---- save patch ----
+        _prefix = f"{cfg.patch_prefix}_" if cfg.patch_prefix else ""
         crop_img_filename = (
+            f"{_prefix}"
             f"f{str(filenameID).zfill(4)}"
             f"x{str(x_c).zfill(4)}"
             f"y{str(y_c).zfill(4)}"
@@ -408,6 +402,8 @@ def run_pipeline(cfg: PipelineConfig) -> pd.DataFrame:
     log.info("  norm_mode=%s  norm_lo=%.1f  norm_hi=%.1f",
              cfg.norm_mode, cfg.norm_lo, cfg.norm_hi)
     log.info("  file_type=%s", cfg.file_type)
+    log.info("  seg_ch=%s  seg_threshold=%.2f  seg_close_size=%d",
+             cfg.seg_ch, cfg.seg_threshold, cfg.seg_close_size)
     log.info("=" * 60)
 
     filenames = patch_prep.list_image_files(str(cfg.image_folder), file_type=cfg.file_type)
