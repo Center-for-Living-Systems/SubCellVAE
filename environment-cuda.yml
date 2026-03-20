@@ -1,16 +1,29 @@
-name: subcellvae-cuda
+name: subcellae-cuda
 channels:
   - pytorch
   - nvidia
   - conda-forge
   - defaults
 dependencies:
-  - python=3.11
+  - python=3.10
   - pytorch
+  - torchvision
   - pytorch-cuda=12.4
   - numpy
   - scipy
+  - pandas
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - scikit-image
+  - tifffile
   - jupyterlab
   - pip
   - pip:
       - -e .
+      - czifile
+      - umap-learn
+      - lightgbm
+      - joblib
+      - pyyaml
+      - phate

@@ -1,186 +1,297 @@
 # SubCellAE
 
-SubCellAE is a Python project for learning latent representations of subcellular image patches with autoencoders and variational autoencoders, then analyzing those latent features with embedding, clustering, labeling, and classification utilities.
+SubCellAE is a Python pipeline for learning latent representations of subcellular fluorescence microscopy patches using autoencoders, then analysing and classifying those representations.
 
-The repository currently contains:
+The pipeline has four sequential stages, each driven by a YAML config file and a dedicated runner script:
 
-- data-preparation helpers for extracting and padding microscopy patches
-- PyTorch models for autoencoder and VAE training
-- dataset utilities for TIFF patch loading
-- latent-space analysis utilities for embedding and clustering
-- classifier training and evaluation helpers on latent features
-- scripts for exporting and combining external label annotations
+| Stage | Script | Config |
+|-------|--------|--------|
+| 1. Patch preparation | `scripts/run_patchprep_from_config.py` | `config/config_*.yaml` |
+| 2. Autoencoder training | `scripts/run_ae_from_config.py` | `config/config_ae.yaml` |
+| 3. Latent analysis | `scripts/run_analysis_from_config.py` | `config/config_analysis.yaml` |
+| 4. Classification | `scripts/run_classification_from_config.py` | `config/config_classification.yaml` |
+
+---
+
+## Setup
+
+Install the package in editable mode so all `subcellae.*` imports resolve correctly:
+
+**CPU:**
+
+```bash
+conda env create -f environment.yml
+conda activate subcellae
+```
+
+**GPU (CUDA 12.4):**
+
+```bash
+conda env create -f environment-cuda.yml
+conda activate subcellae-cuda
+```
+
+Both environments install the package in editable mode (`pip install -e .`) so local edits are immediately reflected.
+
+---
 
 ## Repository Layout
 
 ```text
 subcellae/
-  analysis/         latent extraction and feature analysis helpers
-  classification/   classifier training and evaluation
-  clustering/       clustering utilities
   dataprep/         patch extraction and preprocessing helpers
-  modelling/        AE/VAE models and training scripts
-  pipeline/         end-to-end post-training analysis pipeline
-  utils/            small utility modules and plotting helpers
+  modelling/
+    autoencoders.py   AE / VAE32 / SemiSupAE / ContrastiveAE models + training loops
+    dataset.py        PatchDataset (unified, annotation-aware)
+  clustering/       KMeans and DBSCAN utilities
+  classification/   helper functions for sklearn-based classifiers
+  analysis/         feature extraction helpers (legacy)
+  utils/            small utility modules
+  pipeline/
+    patchprep_pipeline.py     Stage 1 orchestration
+    ae_pipeline.py            Stage 2 orchestration
+    analysis_pipeline.py      Stage 3 orchestration
+    classification_pipeline.py Stage 4 orchestration
 
-config/             analysis configuration templates and constants
-scripts/            runnable scripts, including label-processing utilities
-Makefile            environment and analysis shortcuts
-environment*.yml    Conda environment definitions
-pyproject.toml      package metadata
+config/
+  config_control_czi_dataset_norm.yaml   patch prep – CZI, per-dataset norm
+  config_ycomp_czi_dataset_norm.yaml     patch prep – CZI, per-dataset norm
+  config_npy_shared_no_norm.yaml         patch prep – NPY, no norm
+  config_ae.yaml                         autoencoder training
+  config_analysis.yaml                   latent analysis
+  config_classification.yaml             LightGBM classification
+
+scripts/
+  run_patchprep_from_config.py
+  run_ae_from_config.py
+  run_analysis_from_config.py
+  run_classification_from_config.py
 ```
 
-## Setup
+---
 
-This project uses Conda environments and installs the package in editable mode.
+## Stage 1 — Patch Preparation
 
-CPU environment:
+Extracts centred square patches from CZI or NPY microscopy images, applies optional normalisation (per-image or per-dataset percentile stretch), and saves individual `.tif` files.
+
+**Config keys:**
+
+| Key | Description |
+|-----|-------------|
+| `file_type` | `"czi"` or `"npy"` |
+| `cell_mask_folder` | path to pre-computed segmentation masks; omit or leave null for on-the-fly segmentation |
+| `norm_mode` | `"image"` · `"dataset"` · `null` |
+| `patch_size` | side length in pixels (e.g. `32`) |
+| `patch_prefix` | string prepended to every patch filename (e.g. `"control"`) |
+| `major_ch` | channel index used for patch detection |
+| `norm_channels` | channels to normalise (must include `major_ch`) |
+
+**Run:**
 
 ```bash
-make env
-conda activate subcellvae
+python scripts/run_patchprep_from_config.py config/config_control_czi_dataset_norm.yaml
 ```
 
-CUDA environment:
+**Output** – one `.tif` per patch, named:
+
+```
+{prefix}_f{image_id}x{x_centre}y{y_centre}ps{patch_size}.tif
+```
+
+---
+
+## Stage 2 — Autoencoder Training
+
+Trains one of four model types on the extracted patches, then saves the trained model, loss curves, a latent feature CSV, and reconstruction images.
+
+### Model types
+
+| `model_type` | Description |
+|---|---|
+| `"ae"` | Standard convolutional autoencoder |
+| `"vae"` | Variational AE / β-VAE (VAE32); uses `mu` as latent |
+| `"semisup"` | Semi-supervised AE with a classification head trained on annotated patches |
+| `"contrastive"` | Contrastive AE with NT-Xent loss |
+
+Switch between them by editing `model.model_type` in `config/config_ae.yaml`.
+
+### Key config sections
+
+```yaml
+data:
+  patch_dirs:
+    - path: "/path/to/patches"
+      condition: 0
+      condition_name: "control"
+
+model:
+  model_type   : "ae"    # ae | vae | semisup | contrastive
+  latent_dim   : 8
+  input_ps     : 32
+
+annotation:              # required for semisup; used by all models for CSV labels
+  annotation_file: "/path/to/labels.csv"
+  label_col      : "classification"
+  filename_col   : "unique_ID"
+
+training:
+  epochs      : 200
+  group_split : true     # keeps all patches from the same image in one split
+
+reconstruction:
+  save_recon      : true
+  recon_pad_size  : 64   # padding used during patch extraction
+  recon_image_size: 1024 # canvas size for whole-image outputs
+```
+
+**Run:**
 
 ```bash
-make env-cuda
-conda activate subcellvae-cuda
+python scripts/run_ae_from_config.py config/config_ae.yaml
 ```
 
-Minimal dependencies are defined in:
+**Outputs** written to `output.result_dir`:
 
-- `environment.yml`
-- `environment-cuda.yml`
+```
+model_final.pt
+latents.csv               # filename · condition · group · split · recon_mse ·
+                          # mean_intensity · norm_mse · z_0…z_{N-1} ·
+                          # annotation_label · annotation_label_name
+loss_curve.png
+recon/
+  patches/                # raw_{split}_{name}.tif  &  recon_{split}_{name}.tif
+  images/                 # raw_{group}.tif  &  recon_{group}.tif  (fixed canvas)
+  visual/                 # {group}_comparison.png  (suptitle = group [train|val])
+```
 
-A larger pinned environment snapshot is also included in `environment.full.yml`.
+> **Note on filename convention** — patch files use an underscore before the coordinate block (`control_f0001x…`) while annotation CSVs use a hyphen (`control-f0001x…`). The dataset loader and classification pipeline both normalise this automatically.
 
-## Core Components
+---
 
-### Models
+## Stage 3 — Latent Analysis
 
-The main model definitions live in `subcellae/modelling/subcellvae.py`:
+Reads `latents.csv` directly — no model reload required — and produces embeddings, clustering, and a comprehensive set of diagnostic plots.
 
-- `AE`: convolutional autoencoder for image patches
-- `VAE32`: variational autoencoder for 32x32 patches
+**Config keys:**
 
-There is also an older training script in `subcellae/modelling/train_AE_multisets.py` that appears to be tailored to local datasets and hard-coded filesystem paths.
+```yaml
+input:
+  latents_csv  : "/path/to/latents.csv"
+  split_filter : "all"      # "all" | "train" | "val"
 
-### Dataset Loading
+embedding:
+  methods: [UMAP]           # UMAP and/or PHATE
+  umap_n_neighbors: 15
+  umap_min_dist   : 0.1
 
-`subcellae/modelling/dataset.py` provides `TIFFDataset`, which loads `.tif` and `.tiff` patches into memory and returns:
+clustering:
+  kmeans_enabled   : true
+  kmeans_n_clusters: 5
+  dbscan_enabled   : false
+  boxplot_kind     : "box"  # "box" | "violin"
 
-- image tensor
-- label or group id
-- original image path
+label_orders:
+  annotation_label_name: [...]
+  condition_name        : [...]
+```
 
-### Data Preparation
-
-`subcellae/dataprep/patch_prep.py` contains reusable helpers for:
-
-- loading CZI images and segmentation masks
-- padding images
-- computing centered patch grids
-- applying optional translation and rotation
-- saving extracted TIFF patches
-- recording patch metadata rows
-
-### Analysis Pipeline
-
-`subcellae/pipeline/analysis_pipeline.py` is intended to run post-training analysis on a trained model. Based on the code, it performs:
-
-1. latent extraction from a dataloader
-2. reconstruction MSE calculation
-3. 2D embedding with UMAP and/or PHATE
-4. clustering with KMeans and/or DBSCAN
-5. merging labels with latent features
-6. correlation and label-based visualization outputs
-7. class-distribution and crosstab plots
-8. per-sample reconstruction error export
-
-The wrapper entry point is `scripts/run_analysis_pipeline.py`, which reads a YAML config and launches the analysis run.
-
-### Classification Utilities
-
-`subcellae/classification/classification.py` provides helpers for:
-
-- merging labels with latent features
-- train/validation splitting
-- classifier training
-- evaluation metrics
-- confusion matrix plotting
-
-Supported classifiers currently include:
-
-- logistic regression
-- random forest
-- gradient boosting
-
-### Label Processing Scripts
-
-The `scripts/labels/` folder contains small scripts for converting and merging external annotation CSVs into a standardized format with fields such as:
-
-- `unique_ID`
-- `crop_img_filename`
-- `group`
-- `group_ID`
-- `Position`
-- `classification`
-
-These scripts are written for a specific local labeling workflow and use hard-coded input/output paths.
-
-## Running Analyses
-
-The project includes a Makefile with shortcuts for creating environments and running named analysis jobs.
-
-Useful targets:
+**Run:**
 
 ```bash
-make env
-make env-cuda
-make env-update
-make notebook
-make help
+python scripts/run_analysis_from_config.py config/config_analysis.yaml
 ```
 
-The analysis runner is intended to be used like this:
+**Outputs** written to `output.out_dir`:
+
+```
+umap/
+  by_condition.png · by_split.png · by_annotation.png · by_kmeans.png
+latent_correlation.png / .csv
+latent_by_condition.png · latent_by_annotation.png
+latent_mean_by_condition.png · latent_mean_by_annotation.png
+distribution_condition.png · distribution_annotation.png
+mse_distribution.png · mse_by_condition_split.png · mse_by_annotation_split.png
+norm_mse_distribution.png · norm_mse_by_condition_split.png · ...
+intensity_vs_latent.png     # mean_intensity vs each z_i scatter + Pearson r
+analysis_results.csv        # latents.csv augmented with UMAP coords + cluster labels
+kmeans_model.pkl
+```
+
+---
+
+## Stage 4 — Classification
+
+Trains a LightGBM classifier on the `z_*` latent features and evaluates it against ground-truth labels from an external annotation CSV.
+
+**Config keys:**
+
+```yaml
+input:
+  latents_csv: "/path/to/latents.csv"
+
+labels:
+  label_col   : "classification"
+  label_csv   : "/path/to/annotation.csv"   # leave "" to use labels in latents.csv
+  filename_col: "unique_ID"                  # join key in the annotation CSV
+  label_order : [...]
+  exclude_labels: null
+
+features:
+  include_mean_intensity: false
+
+split:
+  strategy: "from_csv"   # reuse group-aware split from AE training
+                         # or "stratified" for a fresh random split
+
+lightgbm:
+  n_estimators : 500
+  learning_rate: 0.05
+  class_weight : "balanced"
+  n_cv_folds   : 5        # 0 = skip CV
+```
+
+**Run:**
 
 ```bash
-python scripts/run_analysis_pipeline.py --config config/analysis_config.yaml
+python scripts/run_classification_from_config.py config/config_classification.yaml
 ```
 
-The example config in `config/analysis_config.yaml` defines:
+**Outputs** written to `output.out_dir`:
 
-- model checkpoint path
-- model parameters such as latent dimension
-- dataset location
-- dataloader settings
-- output directory
-- optional label CSV
-- embedding settings
-- clustering settings
-- optional label-order configuration
+```
+lgbm_model.pkl
+metrics.txt                       # accuracy · balanced accuracy · F1 · CV summary
+metrics.csv                       # per-class precision / recall / F1
+confusion_matrix_counts.png
+confusion_matrix_norm.png
+feature_importance.png            # split and gain importance for each z_i
+f1_per_class.png
+prob_by_true_class.png            # max predicted probability by true class
+classification_results.csv        # all labelled rows with predicted label + probabilities
+```
 
-## Current Status Notes
+---
 
-This repository is usable as a research codebase, but a few parts look mid-refactor and are worth knowing before you start:
+## End-to-end Example
 
-- `README.md` was originally just a stub; this file reflects the current code layout.
-- `scripts/run_analysis_pipeline.py` imports from `core.*`, but the package in this repo is named `subcellae.*`.
-- `subcellae/pipeline/analysis_pipeline.py` imports from `utils.*`, while the matching modules currently live under `subcellae.analysis`, `subcellae.clustering`, and `subcellae.utils`.
-- `Makefile` analysis targets point to `configs/...`, but the repository currently contains `config/analysis_config.yaml`.
-- several scripts contain absolute local paths and appear to be project-specific rather than fully portable command-line tools
+```bash
+# 1. Extract patches
+python scripts/run_patchprep_from_config.py config/config_control_czi_dataset_norm.yaml
+python scripts/run_patchprep_from_config.py config/config_ycomp_czi_dataset_norm.yaml
 
-If you plan to run the full pipeline on a fresh machine, those import/path mismatches will likely need a cleanup pass first.
+# 2. Train autoencoder (edit config_ae.yaml to select model_type)
+python scripts/run_ae_from_config.py config/config_ae.yaml
 
-## Development
+# 3. Analyse latent space
+python scripts/run_analysis_from_config.py config/config_analysis.yaml
 
-The package metadata in `pyproject.toml` is minimal:
+# 4. Classify FA types
+python scripts/run_classification_from_config.py config/config_classification.yaml
+```
 
-- package name: `subcellvae`
-- version: `0.1.0`
+All four steps support `--dry_run` (prints resolved config without running) and `--log_level DEBUG`.
 
-Because the environment files install the project with `pip -e .`, local edits are immediately reflected in the active environment.
+---
 
 ## License
 
