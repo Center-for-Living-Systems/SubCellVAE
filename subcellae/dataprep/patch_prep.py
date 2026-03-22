@@ -795,6 +795,79 @@ def compute_final_polygon_in_full_image(
 
 
 # ---------------------------------------------------------------------------
+# Distance-to-boundary features
+# ---------------------------------------------------------------------------
+
+def distance_to_boundary_features(
+    cell_mask: np.ndarray,
+    row: int,
+    col: int,
+    n_orientations: int = 8,
+) -> np.ndarray:
+    """Compute rotation-invariant distance-to-boundary features.
+
+    Casts rays in *n_orientations* evenly-spaced directions from ``(row, col)``
+    within *cell_mask* and records the distance (in pixels) to the first zero
+    pixel or image edge in each direction.
+
+    The distances are then **cyclically shifted** so that the direction with the
+    smallest distance is placed first.  This makes the feature vector invariant
+    to the absolute orientation of the patch within the cell.
+
+    Parameters
+    ----------
+    cell_mask : np.ndarray
+        2-D mask; non-zero values are treated as *inside* the cell.
+    row, col : int
+        Pixel coordinate of the query point (row-major, i.e. y then x).
+    n_orientations : int
+        Number of evenly-spaced ray directions to cast. Default ``8``.
+
+    Returns
+    -------
+    np.ndarray
+        Float array of shape ``(n_orientations,)``; the first element
+        corresponds to the direction of minimum distance (rotation-invariant).
+    """
+    h, w = cell_mask.shape
+
+    # Snap outside-mask point to nearest foreground pixel
+    if cell_mask[row, col] == 0:
+        foreground = np.argwhere(cell_mask > 0)
+        if len(foreground) == 0:
+            return np.zeros(n_orientations)
+        nearest = foreground[
+            np.argmin(np.linalg.norm(foreground - np.array([row, col]), axis=1))
+        ]
+        row, col = int(nearest[0]), int(nearest[1])
+
+    angles_deg = np.linspace(0, 360, n_orientations, endpoint=False)
+    distances = np.zeros(n_orientations)
+
+    for i, angle_deg in enumerate(angles_deg):
+        angle_rad = np.deg2rad(angle_deg)
+        dr = np.sin(angle_rad)
+        dc = np.cos(angle_rad)
+
+        step = 0.0
+        while True:
+            step += 0.5
+            ri = int(round(row + dr * step))
+            ci = int(round(col + dc * step))
+
+            if ri < 0 or ri >= h or ci < 0 or ci >= w:
+                distances[i] = step
+                break
+            if cell_mask[ri, ci] == 0:
+                distances[i] = step
+                break
+
+    # Cyclic shift so minimum-distance direction is first → rotation invariant
+    min_idx = int(np.argmin(distances))
+    return np.roll(distances, -min_idx)
+
+
+# ---------------------------------------------------------------------------
 # I/O helpers
 # ---------------------------------------------------------------------------
 

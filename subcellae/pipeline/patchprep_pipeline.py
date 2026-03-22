@@ -37,6 +37,7 @@ from typing import Dict, Optional, Tuple
 import matplotlib
 matplotlib.use("Agg")          # non-interactive backend – safe for scripts
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 import subcellae.dataprep.patch_prep as patch_prep
@@ -137,6 +138,9 @@ class PipelineConfig:
     seg_min_size_post_close: int = 10
     seg_min_size_final: int = 30000
 
+    # --- distance-to-boundary features ---
+    n_dist_orientations: int = 8          # number of ray directions (produces this many columns)
+
     # --- derived (computed in __post_init__) ---
     half_ps: int = field(init=False)
     double_ps: int = field(init=False)
@@ -233,6 +237,10 @@ def _process_file(
         seg_min_size_post_close=cfg.seg_min_size_post_close,
         seg_min_size_final=cfg.seg_min_size_final,
     )
+
+    # ---- equivalent diameter from cell area (used to scale distance features) ----
+    cell_area = float(np.sum(train_seg > 0))
+    equiv_diam = 2.0 * np.sqrt(cell_area / np.pi) if cell_area > 0 else 1.0
 
     # ---- debug figure (accumulation plot) ----
     fig_accu, ax_accu = patch_prep.init_debug_fig(train_img, train_seg, dpi=cfg.dpi)
@@ -336,6 +344,17 @@ def _process_file(
             str(cfg.movie_partitioned_data_dir), crop_img_filename,
             str(cfg.movie_plot_dir), plot_filename,
         )
+
+        # ---- distance-to-boundary features (rotation- and scale-invariant) ----
+        # train_seg is already padded; (y_c, x_c) are in padded coordinates.
+        dist_feats = patch_prep.distance_to_boundary_features(
+            train_seg, y_c, x_c, n_orientations=cfg.n_dist_orientations
+        )
+        dist_feats_norm = dist_feats / equiv_diam
+        s["equiv_diam"] = equiv_diam
+        for k, val in enumerate(dist_feats_norm):
+            s[f"d{k:02d}"] = float(val)
+
         rows.append(s)
 
     log.info(
@@ -356,14 +375,20 @@ def _process_file(
 # Public pipeline entry-point
 # ---------------------------------------------------------------------------
 
-_RECORD_COLS = [
+_BASE_RECORD_COLS = [
     "image_folder", "filename", "filenameID", "x_c", "y_c",
     "rand_angle", "rand_tx", "rand_ty",
     "x_corner1", "x_corner2", "x_corner3", "x_corner4",
     "y_corner1", "y_corner2", "y_corner3", "y_corner4",
     "movie_partitioned_data_dir", "crop_img_filename",
     "movie_plot_dir", "plot_filename",
+    "equiv_diam",
 ]
+
+
+def _record_cols(n_dist: int) -> list:
+    """Return full column list including equiv_diam and d00…d{n_dist-1}."""
+    return _BASE_RECORD_COLS + [f"d{k:02d}" for k in range(n_dist)]
 
 
 def run_pipeline(cfg: PipelineConfig) -> pd.DataFrame:
@@ -407,9 +432,10 @@ def run_pipeline(cfg: PipelineConfig) -> pd.DataFrame:
     log.info("=" * 60)
 
     filenames = patch_prep.list_image_files(str(cfg.image_folder), file_type=cfg.file_type)
+    cols = _record_cols(cfg.n_dist_orientations)
     if not filenames:
         log.warning("No .czi files found in %s", cfg.image_folder)
-        return pd.DataFrame(columns=_RECORD_COLS)
+        return pd.DataFrame(columns=cols)
 
     effective_end = min(cfg.end_ind, len(filenames))
     log.info("Found %d .czi file(s); processing indices %d–%d.",
@@ -455,7 +481,7 @@ def run_pipeline(cfg: PipelineConfig) -> pd.DataFrame:
         all_rows.extend(file_rows)
 
         # ---- write incremental CSV after each file ----
-        record_so_far = pd.DataFrame(all_rows, columns=_RECORD_COLS)
+        record_so_far = pd.DataFrame(all_rows, columns=cols)
         csv_path = cfg.movie_plot_dir / (
             f"data_prep_record_{cfg.condition}_ch{cfg.major_ch}"
             f"_f_{cfg.start_ind}_to_{filenameID}.csv"
@@ -463,6 +489,6 @@ def run_pipeline(cfg: PipelineConfig) -> pd.DataFrame:
         record_so_far.to_csv(str(csv_path), index=False)
         log.info("  CSV updated → %s", csv_path)
 
-    full_record = pd.DataFrame(all_rows, columns=_RECORD_COLS)
+    full_record = pd.DataFrame(all_rows, columns=cols)
     log.info("Pipeline complete. Total patches: %d", len(full_record))
     return full_record

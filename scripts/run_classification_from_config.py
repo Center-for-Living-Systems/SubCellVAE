@@ -71,6 +71,14 @@ def load_config(yaml_path: str | Path) -> ClassificationConfig:
     class_weight      = str(_get("lightgbm",   "class_weight",      "balanced") or "balanced")
     n_cv_folds        = int(_get("lightgbm",   "n_cv_folds",        0))
 
+    # ---- distance features ----
+    dist_patch_prep_dirs  = _get("dist_features", "patch_prep_dirs",    None) or []
+    dist_feature_weight   = float(_get("dist_features", "feature_weight", 100.0))
+
+    # ---- patch sorting ----
+    sort_labelled   = bool(_get("patch_sort", "sort_labelled",   True))
+    sort_unlabelled = bool(_get("patch_sort", "sort_unlabelled", False))
+
     return ClassificationConfig(
         latents_csv=latents_csv,
         out_dir=out_dir,
@@ -90,6 +98,10 @@ def load_config(yaml_path: str | Path) -> ClassificationConfig:
         min_child_samples=min_child_samples,
         class_weight=class_weight,
         n_cv_folds=n_cv_folds,
+        dist_patch_prep_dirs=dist_patch_prep_dirs,
+        dist_feature_weight=dist_feature_weight,
+        sort_labelled=sort_labelled,
+        sort_unlabelled=sort_unlabelled,
     )
 
 

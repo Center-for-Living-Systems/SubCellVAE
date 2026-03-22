@@ -13,14 +13,20 @@ Outputs saved to ``out_dir``:
   - ``confusion_matrix_norm.png``    – row-normalised heatmap
   - ``feature_importance.png``       – LightGBM split + gain importance
   - ``prob_by_true_class.png``       – predicted max-probability by true class
-  - ``classification_results.csv``   – all rows with predicted label + proba
+  - ``classification_results.csv``   – labelled rows with predicted label + proba
   - ``lgbm_model.pkl``               – fitted LightGBM classifier
+  - ``umap_predicted_label.png``     – UMAP of ALL patches, coloured by predicted FA type (tab10)
+  - ``umap_true_label.png``          – UMAP of ALL patches, coloured by true label (where available)
+  - ``umap_all_model.pkl``           – fitted UMAP model (all patches)
+  - ``patch_sort/gt{x}pred{y}/``     – patches copied by true-class / predicted-class index;
+                                       unlabelled patches go into ``gtnpred{y}/``
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -152,6 +158,22 @@ class ClassificationConfig:
     min_child_samples: int  = 20
     class_weight: str       = "balanced"   # "balanced" or null/""
     n_cv_folds: int         = 0            # 0 = no CV
+
+    # --- distance features ---
+    # List of patch-prep plot/csv directories (one per condition).
+    # The pipeline will find the latest data_prep_record_*.csv in each dir,
+    # concatenate them, and merge d00..d07 + equiv_diam into the latents df.
+    # Leave as None / [] to use only latent features.
+    dist_patch_prep_dirs: list = None
+    # Multiplicative weight applied to all d* columns before classification
+    # and UMAP.  Latent features are always kept at weight 1.0.
+    # Use ~100 to bring normalised distances (ratio scale) into a similar
+    # numerical range as the latent dimensions.
+    dist_feature_weight: float = 100.0
+
+    # --- patch sorting ---
+    sort_labelled: bool   = True    # copy train/val patches into gt{x}pred{y} folders
+    sort_unlabelled: bool = False   # copy unlabelled patches into test/gtnpred{y} folders
 
     def __post_init__(self):
         self.latents_csv = Path(self.latents_csv)
@@ -298,6 +320,191 @@ def _plot_per_class_f1(report_dict, class_names, save_path):
 
 
 # ---------------------------------------------------------------------------
+# UMAP and patch-sorting helpers
+# ---------------------------------------------------------------------------
+
+def _plot_umap_predicted(
+    emb: np.ndarray,
+    pred_names: list,
+    label_order: list,
+    title: str,
+    save_path: Path,
+    label_to_color: dict | None = None,
+    xlim: tuple | None = None,
+    ylim: tuple | None = None,
+):
+    """Scatter plot of a 2-D embedding coloured by label.
+
+    Parameters
+    ----------
+    label_to_color : dict, optional
+        Mapping of label name → hex colour string.  Falls back to tab10
+        palette by index if not provided or if a label is missing.
+    xlim, ylim : (float, float), optional
+        Fixed axis limits.  Pass the bounds computed from the full embedding
+        so that all subset plots share the same coordinate system.
+    """
+    palette = plt.get_cmap("tab10")
+    pred_arr = np.array(pred_names)
+    fig, ax = plt.subplots(figsize=(8, 7))
+    for i, lbl in enumerate(label_order):
+        mask = pred_arr == lbl
+        if not mask.any():
+            continue
+        if label_to_color and lbl in label_to_color:
+            color = label_to_color[lbl]
+        else:
+            color = palette(i / max(len(label_order) - 1, 1))
+        ax.scatter(
+            emb[mask, 0], emb[mask, 1],
+            label=lbl, s=4, alpha=0.6, color=color,
+        )
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    ax.legend(markerscale=3, fontsize=8, loc="best")
+    ax.set_title(title)
+    ax.set_xlabel("UMAP 1")
+    ax.set_ylabel("UMAP 2")
+    fig.tight_layout()
+    fig.savefig(str(save_path), dpi=150)
+    plt.close(fig)
+
+
+def _sort_patches_to_folders(
+    df_all: pd.DataFrame,
+    pred_names: list,
+    label_order: list,
+    label_col: str,
+    sort_dir: Path,
+    sort_labelled: bool = True,
+    sort_unlabelled: bool = False,
+):
+    """Copy patch tifs into a three-level folder hierarchy.
+
+    Structure
+    ---------
+    ::
+
+        patch_sort/
+          train/             labelled patches whose AE split == "train"
+            gt{x}pred{y}/
+          val/               labelled patches whose AE split == "val"
+            gt{x}pred{y}/
+          test/              unlabelled patches (no ground-truth label)
+            gtnpred{y}/
+
+    The relevant split-level folders are deleted and recreated before each run
+    so the results are always fresh.  ``sort_labelled`` controls train/val;
+    ``sort_unlabelled`` controls test.
+    Files are copied (originals are preserved).
+    """
+    if not sort_labelled and not sort_unlabelled:
+        log.info("  Patch sorting disabled (both sort_labelled and sort_unlabelled are false)")
+        return
+
+    sort_dir.mkdir(parents=True, exist_ok=True)
+
+    # Delete stale split folders before writing fresh results
+    for split_folder, enabled in [("train", sort_labelled),
+                                   ("val",   sort_labelled),
+                                   ("test",  sort_unlabelled)]:
+        target = sort_dir / split_folder
+        if enabled and target.exists():
+            shutil.rmtree(str(target))
+            log.debug("  Cleared stale folder: %s", target)
+
+    label_to_id = {lbl: i for i, lbl in enumerate(label_order)}
+
+    missing_files = 0
+    for i, (_, row) in enumerate(df_all.iterrows()):
+        pred_idx = label_to_id.get(pred_names[i], "?")
+
+        gt_val = row.get(label_col, None)
+        has_label = (
+            gt_val is not None
+            and not (isinstance(gt_val, float) and np.isnan(gt_val))
+            and str(gt_val) != ""
+        )
+
+        if has_label:
+            if not sort_labelled:
+                continue
+            gt_str = str(gt_val)
+            if gt_str not in label_to_id:
+                # Label exists but is not in label_order (e.g. excluded class) — skip
+                continue
+            gt_key = label_to_id[gt_str]
+            split_val = str(row.get("split", "train"))
+            split_folder = split_val if split_val in {"train", "val"} else "train"
+            folder_name = f"gt{gt_key}pred{pred_idx}"
+        else:
+            if not sort_unlabelled:
+                continue
+            split_folder = "test"
+            folder_name = f"gtnpred{pred_idx}"
+
+        dest_dir = sort_dir / split_folder / folder_name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        src = Path(str(row["filepath"]))
+        if not src.exists():
+            missing_files += 1
+            continue
+        shutil.copy2(str(src), str(dest_dir / src.name))
+
+    if missing_files:
+        log.warning("  %d source files not found and were skipped", missing_files)
+
+
+# ---------------------------------------------------------------------------
+# Distance-feature loader
+# ---------------------------------------------------------------------------
+
+def _load_dist_csvs(dirs: list) -> pd.DataFrame:
+    """Load and concatenate patch-prep record CSVs from one or more directories.
+
+    For each directory, finds all files matching
+    ``data_prep_record_*_to_<N>.csv`` and picks the one with the **largest**
+    ``<N>`` (most complete run).  The selected files are concatenated and the
+    result is returned.
+
+    The returned DataFrame has at least ``crop_img_filename``, ``equiv_diam``,
+    and ``d00``…``d{N-1}`` columns.
+    """
+    import glob as _glob
+
+    dfs = []
+    for d in dirs:
+        d = Path(d)
+        candidates = list(d.glob("data_prep_record_*_to_*.csv"))
+        if not candidates:
+            log.warning("  No data_prep_record_*_to_*.csv found in %s – skipping", d)
+            continue
+
+        # Extract the trailing integer (the 'to_NNN' part) for each file
+        def _end_idx(p: Path) -> int:
+            stem = p.stem                        # e.g. data_prep_record_control_ch1_f_0_to_42
+            last = stem.rsplit("_to_", 1)[-1]
+            try:
+                return int(last)
+            except ValueError:
+                return -1
+
+        best = max(candidates, key=_end_idx)
+        log.info("  Dist CSV: %s", best)
+        dfs.append(pd.read_csv(best))
+
+    if not dfs:
+        raise FileNotFoundError(
+            "No data_prep_record CSVs found in any of the provided "
+            f"dist_patch_prep_dirs: {dirs}"
+        )
+    return pd.concat(dfs, ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
 # Public pipeline entry-point
 # ---------------------------------------------------------------------------
 
@@ -390,19 +597,63 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
     log.info("  Classes (%d): %s", n_classes, label_order)
 
     # ------------------------------------------------------------------
+    # 1b. Merge distance features (optional)
+    # ------------------------------------------------------------------
+    dist_cols: list[str] = []
+    dist_df_slim = None          # kept in scope for reuse in step 9
+    if cfg.dist_patch_prep_dirs:
+        log.info("Step 1b: Loading distance features from %d dir(s) …",
+                 len(cfg.dist_patch_prep_dirs))
+        dist_df = _load_dist_csvs(cfg.dist_patch_prep_dirs)
+
+        # dist CSV join key is crop_img_filename (underscore style, same as latents filename)
+        dist_df["_dist_key"] = dist_df["crop_img_filename"].apply(
+            lambda p: Path(p).name
+        )
+        df["_dist_key"] = df["filename"].apply(lambda p: Path(p).name)
+
+        dist_cols = ["equiv_diam"] + [c for c in dist_df.columns
+                                       if re.fullmatch(r"d\d{2}", c)]
+        dist_df_slim = dist_df[["_dist_key"] + dist_cols].drop_duplicates("_dist_key")
+
+        n_before = len(df)
+        df = df.merge(dist_df_slim, on="_dist_key", how="left")
+        df = df.drop(columns=["_dist_key"])
+        matched = df[dist_cols[0]].notna().sum()
+        log.info("  Merged dist features: %d / %d rows matched", matched, n_before)
+        if matched == 0:
+            log.warning("  No distance features matched — check that patch_prep_dirs "
+                        "contain records for the same patches as latents_csv.")
+
+    # ------------------------------------------------------------------
     # 2. Feature matrix
     # ------------------------------------------------------------------
     log.info("Step 2: Building feature matrix …")
     if cfg.feature_cols:
-        feat_cols = cfg.feature_cols
+        feat_cols = list(cfg.feature_cols)
     else:
         feat_cols = [c for c in df.columns if c.startswith("z_")]
+
+    if dist_cols:
+        d_feats = [c for c in dist_cols if c.startswith("d")]   # d00..d07; exclude equiv_diam
+        feat_cols = feat_cols + [c for c in d_feats if c in df.columns]
+        log.info("  Distance features added: %s", d_feats)
 
     if cfg.include_mean_intensity and "mean_intensity" in df.columns:
         feat_cols = feat_cols + ["mean_intensity"]
 
+    # Build per-feature scale: dist cols × dist_feature_weight, rest × 1.0
+    _dist_feat_set = set(c for c in feat_cols if re.fullmatch(r"d\d{2}", c))
+    feat_scale = np.array(
+        [cfg.dist_feature_weight if c in _dist_feat_set else 1.0 for c in feat_cols],
+        dtype=np.float32,
+    )
+    if _dist_feat_set:
+        log.info("  Feature scaling: latent ×1  dist ×%.0f  (dist cols: %s)",
+                 cfg.dist_feature_weight, sorted(_dist_feat_set))
+
     log.info("  Features: %d  (%s … %s)", len(feat_cols), feat_cols[0], feat_cols[-1])
-    X = df[feat_cols].values.astype(np.float32)
+    X = df[feat_cols].values.astype(np.float32) * feat_scale
     y = df["_y"].values
 
     # ------------------------------------------------------------------
@@ -521,20 +772,37 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
     # ------------------------------------------------------------------
     log.info("Step 7: Saving plots …")
 
-    # Confusion matrices
+    # Confusion matrices — validation set
     acc = metrics["accuracy"]
     _plot_confusion_matrix(
         metrics["confusion_matrix"], label_order,
-        title=f"Confusion matrix (counts)  acc={acc:.3f}",
-        save_path=cfg.out_dir / "confusion_matrix_counts.png",
+        title=f"Val – confusion matrix (counts)  acc={acc:.3f}",
+        save_path=cfg.out_dir / "confusion_matrix_counts_val.png",
         normalize=False,
     )
     _plot_confusion_matrix(
         metrics["confusion_matrix"], label_order,
-        title=f"Confusion matrix (normalised)  acc={acc:.3f}",
-        save_path=cfg.out_dir / "confusion_matrix_norm.png",
+        title=f"Val – confusion matrix (normalised)  acc={acc:.3f}",
+        save_path=cfg.out_dir / "confusion_matrix_norm_val.png",
         normalize=True,
     )
+
+    # Confusion matrices — training set
+    train_metrics = _evaluate(clf, X_train, y_train, label_order)
+    train_acc = train_metrics["accuracy"]
+    _plot_confusion_matrix(
+        train_metrics["confusion_matrix"], label_order,
+        title=f"Train – confusion matrix (counts)  acc={train_acc:.3f}",
+        save_path=cfg.out_dir / "confusion_matrix_counts_train.png",
+        normalize=False,
+    )
+    _plot_confusion_matrix(
+        train_metrics["confusion_matrix"], label_order,
+        title=f"Train – confusion matrix (normalised)  acc={train_acc:.3f}",
+        save_path=cfg.out_dir / "confusion_matrix_norm_train.png",
+        normalize=True,
+    )
+    log.info("  Train acc=%.4f  |  Val acc=%.4f", train_acc, acc)
 
     # Feature importance
     _plot_feature_importance(clf, feat_cols,
@@ -563,6 +831,158 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
         df_out[f"prob_{lbl}"] = all_proba[:, i]
 
     df_out.to_csv(str(cfg.out_dir / "classification_results.csv"), index=False)
+
+    # ------------------------------------------------------------------
+    # 9. UMAP of ALL patches coloured by predicted FA type
+    # ------------------------------------------------------------------
+    log.info("Step 9: UMAP of all patches coloured by predicted label …")
+    try:
+        from umap import UMAP as _UMAP
+
+        # Load every row from latents.csv (labelled + unlabelled)
+        df_all = pd.read_csv(cfg.latents_csv)
+
+        # Merge distance features into df_all (same join as step 1b)
+        if dist_df_slim is not None:
+            df_all["_dist_key"] = df_all["filename"].apply(lambda p: Path(p).name)
+            df_all = df_all.merge(dist_df_slim, on="_dist_key", how="left").drop(columns=["_dist_key"])
+
+        # Merge external labels if provided (for GT colour in a second plot)
+        if cfg.label_csv:
+            label_path = Path(cfg.label_csv)
+            ext = label_path.suffix.lower()
+            ldf_all = (pd.read_excel(label_path)
+                       if ext in {".xlsx", ".xls"}
+                       else pd.read_csv(label_path))
+            ldf_all["_uid"] = ldf_all[cfg.filename_col].astype(str).apply(
+                lambda p: Path(p).name
+            )
+            df_all["_uid"] = df_all["filename"].apply(_to_unique_id)
+            df_all = df_all.merge(
+                ldf_all[["_uid", cfg.label_col]].drop_duplicates("_uid"),
+                on="_uid", how="left",
+            ).drop(columns=["_uid"])
+
+        X_all = df_all[feat_cols].values.astype(np.float32) * feat_scale
+        log.info("  UMAP input shape: %s  (features: %s)", X_all.shape, feat_cols)
+        pred_all      = clf.predict(X_all)
+        pred_names_all = [id_to_label[p] for p in pred_all]
+
+        reducer_all = _UMAP(n_components=2, random_state=cfg.random_state)
+        emb_all = reducer_all.fit_transform(X_all)
+        joblib.dump(reducer_all, str(cfg.out_dir / "umap_all_model.pkl"))
+
+        # Load project colour map (falls back gracefully if import fails)
+        try:
+            from subcellae.utils.label_colors import classification_label_to_color
+            color_map = classification_label_to_color
+        except ImportError:
+            color_map = None
+
+        pred_arr_all = np.array(pred_names_all)
+        fa4_order    = label_order[:4]   # first 4 classes, mask out "No adhesion"
+
+        # Compute axis limits from the full embedding with 5% padding
+        _pad = 0.05
+        x_range = emb_all[:, 0].max() - emb_all[:, 0].min()
+        y_range = emb_all[:, 1].max() - emb_all[:, 1].min()
+        xlim = (emb_all[:, 0].min() - _pad * x_range,
+                emb_all[:, 0].max() + _pad * x_range)
+        ylim = (emb_all[:, 1].min() - _pad * y_range,
+                emb_all[:, 1].max() + _pad * y_range)
+
+        def _umap_subset(row_mask, class_mask, title, save_path):
+            """Helper: plot UMAP for rows in row_mask, classes in class_mask."""
+            combined = row_mask & class_mask
+            if combined.any():
+                _plot_umap_predicted(
+                    emb_all[combined],
+                    pred_arr_all[combined].tolist(),
+                    [l for l in label_order if l in pred_arr_all[combined]],
+                    title=title,
+                    save_path=save_path,
+                    label_to_color=color_map,
+                    xlim=xlim,
+                    ylim=ylim,
+                )
+
+        all_rows    = np.ones(len(df_all), dtype=bool)
+        all_classes = np.ones(len(df_all), dtype=bool)
+        fa4_mask    = np.isin(pred_arr_all, fa4_order)
+
+        cond_col = "condition_name" if "condition_name" in df_all.columns else None
+        ctrl_mask = (df_all[cond_col].values == "control") if cond_col else all_rows
+        ycomp_mask = (df_all[cond_col].values == "ycomp")  if cond_col else all_rows
+
+        # ── all patches, all classes ──────────────────────────────────────
+        _plot_umap_predicted(
+            emb_all, pred_names_all, label_order,
+            title="UMAP – all patches, predicted FA type",
+            save_path=cfg.out_dir / "umap_predicted_all.png",
+            label_to_color=color_map,
+            xlim=xlim, ylim=ylim,
+        )
+        # ── all patches, FA4 only ─────────────────────────────────────────
+        _umap_subset(all_rows, fa4_mask,
+                     "UMAP – all patches, predicted FA type (FA4)",
+                     cfg.out_dir / "umap_predicted_all_fa4.png")
+        # ── control, all classes ──────────────────────────────────────────
+        _umap_subset(ctrl_mask, all_classes,
+                     "UMAP – control, predicted FA type",
+                     cfg.out_dir / "umap_predicted_control.png")
+        # ── control, FA4 only ─────────────────────────────────────────────
+        _umap_subset(ctrl_mask, fa4_mask,
+                     "UMAP – control, predicted FA type (FA4)",
+                     cfg.out_dir / "umap_predicted_control_fa4.png")
+        # ── ycomp, all classes ────────────────────────────────────────────
+        _umap_subset(ycomp_mask, all_classes,
+                     "UMAP – ycomp, predicted FA type",
+                     cfg.out_dir / "umap_predicted_ycomp.png")
+        # ── ycomp, FA4 only ───────────────────────────────────────────────
+        _umap_subset(ycomp_mask, fa4_mask,
+                     "UMAP – ycomp, predicted FA type (FA4)",
+                     cfg.out_dir / "umap_predicted_ycomp_fa4.png")
+
+        # ── true label — labelled patches only ────────────────────────────
+        if cfg.label_col in df_all.columns:
+            gt_names_all = np.array(df_all[cfg.label_col].fillna("").tolist())
+            labelled_mask = np.isin(gt_names_all, label_order)
+            if labelled_mask.any():
+                _plot_umap_predicted(
+                    emb_all[labelled_mask],
+                    gt_names_all[labelled_mask].tolist(),
+                    label_order,
+                    title="UMAP – labelled patches, true FA type",
+                    save_path=cfg.out_dir / "umap_true_label.png",
+                    label_to_color=color_map,
+                    xlim=xlim, ylim=ylim,
+                )
+
+        log.info("  UMAP plots saved (n=%d patches)", len(df_all))
+
+    except ImportError:
+        log.warning("  umap-learn not installed – skipping UMAP step")
+        df_all = pd.read_csv(cfg.latents_csv)
+        if dist_df_slim is not None:
+            df_all["_dist_key"] = df_all["filename"].apply(lambda p: Path(p).name)
+            df_all = df_all.merge(dist_df_slim, on="_dist_key", how="left").drop(columns=["_dist_key"])
+        pred_all       = clf.predict(df_all[feat_cols].values.astype(np.float32) * feat_scale)
+        pred_names_all = [id_to_label[p] for p in pred_all]
+
+    # ------------------------------------------------------------------
+    # 10. Copy patches into gt{x}pred{y} folders
+    # ------------------------------------------------------------------
+    log.info("Step 10: Sorting patches into gt/pred folders …")
+    sort_dir = cfg.out_dir / "patch_sort"
+    _sort_patches_to_folders(
+        df_all, pred_names_all, label_order,
+        label_col=cfg.label_col,
+        sort_dir=sort_dir,
+        sort_labelled=cfg.sort_labelled,
+        sort_unlabelled=cfg.sort_unlabelled,
+    )
+    n_leaf = sum(1 for p in sort_dir.rglob("gt*") if p.is_dir())
+    log.info("  Patches sorted into %d gt/pred folders under %s", n_leaf, sort_dir)
 
     log.info("Classification pipeline complete.  Outputs → %s", cfg.out_dir)
     return {

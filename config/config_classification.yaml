@@ -77,6 +77,35 @@ lightgbm:
   n_cv_folds: 5
 
 # ---------------------------------------------------------------------------
+# Distance features (optional – latent + dist combined classification)
+# ---------------------------------------------------------------------------
+dist_features:
+  # List of patch-prep output directories (one per condition).
+  # Each dir is searched for the data_prep_record_*_to_<N>.csv with the
+  # largest N; those CSVs are concatenated and merged into the latents by
+  # filename.  Leave as null / [] to use latent features only.
+  # Output will be written to the out_dir above; name it accordingly,
+  # e.g. fa_type_classification_lat_dist.
+  # patch_prep_dirs: null
+  patch_prep_dirs:
+    - "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_control_20260321_2300"
+    - "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_ycomp_20260321_2255"
+
+  # Multiplicative weight for d* columns before classification and UMAP.
+  # Latent features stay at ×1.  Use 100 to convert normalised distances
+  # (0–1 ratio scale) into a comparable range to the latent dimensions.
+  feature_weight: 20.0
+
+# ---------------------------------------------------------------------------
+# Patch sorting
+# ---------------------------------------------------------------------------
+patch_sort:
+  # Copy labelled patches (train + val splits) into gt{x}pred{y} folders.
+  sort_labelled  : true
+  # Copy unlabelled patches (no ground-truth, "test" folder) into gtnpred{y} folders.
+  sort_unlabelled: false
+
+# ---------------------------------------------------------------------------
 # Misc
 # ---------------------------------------------------------------------------
 misc:

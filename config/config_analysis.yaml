@@ -8,14 +8,14 @@
 # Input
 # ---------------------------------------------------------------------------
 input:
-  latents_csv  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/baseline_AE/latents.csv"
+  latents_csv  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/latents.csv"
   split_filter : "all"    # "all" | "train" | "val"
 
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/baseline_AE/analysis"
+  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/analysis"
 
 # ---------------------------------------------------------------------------
 # Embedding
