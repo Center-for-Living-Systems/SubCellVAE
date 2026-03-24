@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -l \"strategy.*stratified\" /mnt/d/lding/CLS_GitHub/SubCellAE/config/test_config/cls_*.yaml)",
+      "Read(//mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_control_20260318_2318/**)",
+      "Read(//mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_ycomp_20260318_2325/**)",
+      "Read(//mnt/d/lding/FA/analysis_results/labelling/**)",
+      "Read(//mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_control_20260321_2300/**)",
+      "Read(//mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_ycomp_20260321_2255/**)",
+      "Bash(python -c \"import torch, lightgbm, umap, joblib, yaml, tifffile, sklearn; print\\(''torch'', torch.__version__\\); print\\(''lgbm'', lightgbm.__version__\\); print\\(''umap-learn OK''\\); print\\(''all deps OK''\\)\")",
+      "Bash(conda info:*)",
+      "Bash(conda run -n subcellae python -c \":*)",
+      "Bash(conda run:*)",
+      "Bash(sort echo:*)",
+      "Bash(ls /mnt/d/lding/CLS_GitHub/SubCellAE/scripts/run_*apply*.py /mnt/d/lding/CLS_GitHub/SubCellAE/scripts/run_newdata_validation.sh)",
+      "Read(//mnt/d/lding/FA/data/FA_ML_Annabel_20250217/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/**)"
+    ],
+    "additionalDirectories": [
+      "/mnt/d/lding/CLS_GitHub/SubCellAE/config/test_config"
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+# =============================================================================
+# Patch-prep: new validation data – ycomp group
+# NOTE: update image_folder to the actual new-experiment ycomp folder.
+#       use_timestamp: false  → output paths are fixed (no date suffix)
+#       so that ae_apply configs can reference them directly.
+# =============================================================================
+
+paths:
+  image_folder      : "/mnt/d/lding/FA/data/FA_ML_Annabel_20250217/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/Y-comp"
+  cell_mask_folder  : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/y_ch1_major/code_org_20250902_seg/mask"
+  patch_output_dir  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/patches/ycomp/tiff_patches32"
+  plot_output_dir   : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/patches/ycomp/plot_patches32"
+
+experiment:
+  condition : "ycomp"
+  major_ch  : 1
+
+input:
+  file_type : "czi"
+  start_ind : 0
+  end_ind   : 11
+
+patch:
+  patch_size   : 32
+  mask_ratio   : 0.4
+  pad_size     : 64
+  patch_prefix : ""
+
+normalization:
+  norm_mode     : "dataset"   # null | "image" | "dataset"
+  norm_channels : [1]         # channels to include in dataset-level stat computation
+  norm_lo       : 0.2
+  norm_hi       : 99.8
+
+segmentation:
+  seg_ch               : 1
+  seg_threshold        : 0.2
+  seg_close_size       : 5
+  seg_min_size_initial : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final   : 30000
+
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+misc:
+  dpi           : 256
+  debug         : false
+  log_level     : "INFO"
+  use_timestamp : false   # keep paths deterministic for downstream configs

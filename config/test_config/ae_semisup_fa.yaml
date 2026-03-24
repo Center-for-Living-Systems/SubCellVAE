@@ -31,12 +31,15 @@ model:
   lambda_cls_2  : 0.0   # Position head OFF
 
 training:
-  epochs         : 200
-  lr             : 0.001
-  batch_size     : 128
-  val_split      : 0.2
-  loss_norm_flag : false
-  group_split    : true
+  epochs                  : 500
+  lr                      : 0.001
+  batch_size              : 128
+  val_split               : 0.2
+  loss_norm_flag          : false
+  group_split             : true
+  weight_decay            : 0.0001
+  early_stopping_patience : 0       # disabled – run all 500 epochs
+  min_epochs_for_best     : 200     # only save best checkpoint after epoch 200
 
 annotation:
   annotation_file : "/mnt/d/lding/FA/analysis_results/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"

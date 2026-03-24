@@ -1,0 +1,53 @@
+# =============================================================================
+# Patch-prep: new validation data – control group
+# NOTE: update image_folder to the actual new-experiment control folder.
+#       use_timestamp: false  → output paths are fixed (no date suffix)
+#       so that ae_apply configs can reference them directly.
+# =============================================================================
+
+paths:
+  image_folder      : "/mnt/d/lding/FA/data/FA_ML_Annabel_20250217/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/Control"
+  cell_mask_folder  : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/ctrl_ch1_major/code_org_20250902_seg/mask"
+  patch_output_dir  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/patches/control/tiff_patches32"
+  plot_output_dir   : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/patches/control/plot_patches32"
+
+experiment:
+  condition : "control"
+  major_ch  : 1
+
+input:
+  file_type : "czi"
+  start_ind : 0
+  end_ind   : 10
+
+patch:
+  patch_size   : 32
+  mask_ratio   : 0.4
+  pad_size     : 64
+  patch_prefix : ""
+
+normalization:
+  norm_mode     : null
+  norm_channels : null
+  norm_lo       : 1.0
+  norm_hi       : 99.0
+
+segmentation:
+  seg_ch               : 1
+  seg_threshold        : 0.2
+  seg_close_size       : 5
+  seg_min_size_initial : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final   : 30000
+
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+misc:
+  dpi           : 256
+  debug         : false
+  log_level     : "INFO"
+  use_timestamp : false   # keep paths deterministic for downstream configs

@@ -115,6 +115,9 @@ def load_config(yaml_path: str | Path) -> AEConfig:
     val_split      = float(_get("training", "val_split",      0.2))
     loss_norm_flag = bool(_get("training",  "loss_norm_flag", False))
     group_split    = bool(_get("training",  "group_split",    True))
+    weight_decay              = float(_get("training", "weight_decay",              1e-4))
+    early_stopping_patience   = int(_get("training",   "early_stopping_patience",  0))
+    min_epochs_for_best       = int(_get("training",   "min_epochs_for_best",       200))
 
     # ---- reconstruction ----
     save_recon       = bool(_get("reconstruction", "save_recon",       True))
@@ -150,6 +153,9 @@ def load_config(yaml_path: str | Path) -> AEConfig:
         val_split=val_split,
         loss_norm_flag=loss_norm_flag,
         group_split=group_split,
+        weight_decay=weight_decay,
+        early_stopping_patience=early_stopping_patience,
+        min_epochs_for_best=min_epochs_for_best,
         save_recon=save_recon,
         recon_pad_size=recon_pad_size,
         recon_image_size=recon_image_size,

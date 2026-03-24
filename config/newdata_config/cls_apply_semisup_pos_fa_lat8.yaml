@@ -1,0 +1,37 @@
+# =============================================================================
+# Cls Apply: fa-type | AE: semisup_pos | Features: lat8
+# Results:   /mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/semisup_pos/fa_cls_lat8/
+# =============================================================================
+
+input:
+  latents_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/semisup_pos/latents_newdata.csv"
+
+model:
+  model_pkl      : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run_overfit_20260322/semisup_pos/fa_cls_lat8/lgbm_model.pkl"
+  umap_model_pkl : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run_overfit_20260322/semisup_pos/fa_cls_lat8/umap_all_model.pkl"
+
+output:
+  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/semisup_pos/fa_cls_lat8"
+
+labels:
+  label_order:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+
+features:
+  feature_cols : null   # auto-detect z_* columns
+
+dist_features:
+  patch_prep_dirs: null
+  feature_weight : 20.0
+
+umap:
+  n_neighbors  : 15
+  min_dist     : 0.1
+  random_state : 42
+
+misc:
+  log_level : "INFO"

@@ -57,7 +57,8 @@ model:
   # Dual semi-sup: set lambda_cls_2 > 0 to also train the Position head.
   # num_classes_2 is inferred from label_order_2; set to 0 to disable.
   num_classes_2 : 4            # set to 5 (or leave 0 to auto-infer) when using dual labels
-  lambda_cls_2  : 1.0          # 0.0 = single-label mode (default / backward-compat)
+  lambda_cls_2  : 0.2          # 0.0 = single-label mode (default / backward-compat)
+                               # keep low (0.1–0.3) so recon loss remains dominant
 
   # -- Contrastive-specific (only used when model_type = "contrastive") ----
   # proj_dim        : 64         # projection-head output dim for NT-Xent loss
@@ -104,12 +105,17 @@ annotation:
 # Training
 # ---------------------------------------------------------------------------
 training:
-  epochs         : 200     # total training epochs
+  epochs         : 500     # total training epochs
   lr             : 0.001   # Adam learning rate
   batch_size     : 128     # mini-batch size
   val_split      : 0.2     # fraction of data held out for validation
   loss_norm_flag : false   # use signal-power-normalised MSE (AE only)
   group_split    : true    # keep all patches from the same image in the same split
+
+  # SemiSup regularisation / stability (ignored by AE/VAE/contrastive)
+  weight_decay            : 0.0001   # Adam L2 regularisation
+  early_stopping_patience : 0        # 0 = disabled; run all 500 epochs
+  min_epochs_for_best     : 200      # best-checkpoint tracking starts at epoch 200
 
 # ---------------------------------------------------------------------------
 # Reconstruction output

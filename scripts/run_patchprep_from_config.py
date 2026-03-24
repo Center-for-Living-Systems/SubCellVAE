@@ -62,9 +62,10 @@ def load_config(yaml_path: str | Path) -> PipelineConfig:
         return raw.get(section, {}).get(key, default)
 
     # ---- paths ----
-    # patch_output_dir and plot_output_dir get a timestamp suffix appended
-    # so each run produces a uniquely-named output folder (same convention
-    # as run_patchprep_pipeline.py).
+    # By default a timestamp suffix is appended to output dirs so each run
+    # produces a uniquely-named folder.  Set ``misc.use_timestamp: false`` in
+    # the YAML to disable this (useful when downstream configs need fixed paths).
+    use_timestamp = bool(_get("misc", "use_timestamp", True))
     time_str = datetime.now().strftime("%Y%m%d_%H%M")
 
     image_folder      = Path(_get("paths", "image_folder"))
@@ -74,8 +75,12 @@ def load_config(yaml_path: str | Path) -> PipelineConfig:
     base_patch_dir   = _get("paths", "patch_output_dir")
     base_plot_dir    = _get("paths", "plot_output_dir")
 
-    patch_output_dir = Path(f"{base_patch_dir}_{time_str}")
-    plot_output_dir  = Path(f"{base_plot_dir}_{time_str}")
+    if use_timestamp:
+        patch_output_dir = Path(f"{base_patch_dir}_{time_str}")
+        plot_output_dir  = Path(f"{base_plot_dir}_{time_str}")
+    else:
+        patch_output_dir = Path(base_patch_dir)
+        plot_output_dir  = Path(base_plot_dir)
 
     # ---- build and return ----
     return PipelineConfig(

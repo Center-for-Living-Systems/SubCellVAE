@@ -25,7 +25,7 @@ features:
   include_mean_intensity: false
 
 split:
-  strategy    : "stratified"
+  strategy    : "from_csv"
   test_size   : 0.2
   random_state: 42
 

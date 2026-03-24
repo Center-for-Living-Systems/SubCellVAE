@@ -3,3 +3,6 @@ name = "subcellae"
 version = "0.1.0"
 
 [tool.setuptools.packages.find]
+where = ["."]
+include = ["subcellae*"]
+exclude = ["results*", "logs*", "data*", "config*", "scripts*", "tests*"]

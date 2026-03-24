@@ -195,6 +195,11 @@ class AEConfig:
     loss_norm_flag: bool = False
     group_split: bool   = True   # keep all patches from the same image in the same split
 
+    # --- semisup regularisation / stability ---
+    weight_decay: float          = 1e-4   # Adam L2 weight decay
+    early_stopping_patience: int = 0      # 0 = disabled
+    min_epochs_for_best: int     = 200    # best-checkpoint tracking starts at this epoch
+
     # --- reconstruction output ---
     save_recon: bool       = True   # whether to write reconstruction images
     recon_pad_size: int    = 64     # padding used during patch extraction; subtracted
@@ -635,6 +640,8 @@ def run_ae_pipeline(cfg: AEConfig):
         else:
             log.info("  [SemiSup] num_classes=%d  lambda_recon=%.3f  lambda_cls=%.3f",
                      cfg.num_classes, cfg.lambda_recon, cfg.lambda_cls)
+        log.info("  [SemiSup reg] weight_decay=%g  early_stopping_patience=%d  min_epochs_for_best=%d",
+                 cfg.weight_decay, cfg.early_stopping_patience, cfg.min_epochs_for_best)
     elif cfg.model_type == "contrastive":
         log.info("  [Contrastive] proj_dim=%d  noise_prob=%.3f  temperature=%.3f  "
                  "lambda_contrast=%.3f",
@@ -817,6 +824,9 @@ def run_ae_pipeline(cfg: AEConfig):
             lambda_cls=cfg.lambda_cls,
             result_dir=result_dir_str,
             lambda_cls2=cfg.lambda_cls_2,
+            weight_decay=cfg.weight_decay,
+            early_stopping_patience=cfg.early_stopping_patience,
+            min_epochs_for_best=cfg.min_epochs_for_best,
         )
 
     else:  # "contrastive"

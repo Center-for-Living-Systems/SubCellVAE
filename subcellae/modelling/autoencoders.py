@@ -617,7 +617,10 @@ def train_semisup_ae(
     lambda_recon,
     lambda_cls,
     result_dir,
-    lambda_cls2: float = 0.0,   # >0 activates the second classification head
+    lambda_cls2: float = 0.0,            # >0 activates the second classification head
+    weight_decay: float = 1e-4,          # L2 regularisation on all weights
+    early_stopping_patience: int = 0,    # 0 = disabled; stop when val doesn't improve
+    min_epochs_for_best: int = 200,      # ignore best-checkpoint tracking before this epoch
 ):
     """
     Training loop for SemiSupAE.
@@ -628,15 +631,38 @@ def train_semisup_ae(
     When ``lambda_cls2 > 0`` and the model has a second head (``model.classifier2``),
     the dual loss :func:`semisup_ae_loss_dual` is used, incorporating both
     FA-type and Position labels simultaneously.
+
+    Regularisation / stability
+    --------------------------
+    weight_decay : float
+        Adam L2 weight decay.  Helps prevent encoder/decoder overfitting.
+    early_stopping_patience : int
+        Stop training when val loss has not improved for this many consecutive
+        epochs, then restore the weights from the best epoch.  Set to 0 to
+        disable early stopping (full ``epochs`` are always run).
+    min_epochs_for_best : int
+        Best-checkpoint tracking does not start until this epoch is reached.
+        Prevents saving a degenerate early model as the "best".
+        Set to 0 to track from the very first epoch.
+    A ``ReduceLROnPlateau`` scheduler (factor 0.5, patience 10) is always
+    active; the learning rate is halved whenever val loss plateaus.
     """
     dual_mode = lambda_cls2 > 0 and getattr(model, "classifier2", None) is not None
 
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-6,
+    )
 
     train_losses, val_losses   = [], []
     train_recon, train_cls     = [], []
     val_recon,   val_cls       = [], []
     train_cls2,  val_cls2      = [], []
+
+    best_val_loss = float("inf")
+    best_state    = None
+    best_epoch    = 0
+    no_improve    = 0
 
     error_print_period = max(1, epochs // 50)
     recon_view_period  = max(1, epochs // 10)
@@ -723,19 +749,47 @@ def train_semisup_ae(
         if total_labelled2 > 0:
             acc_str += f"  val_acc2={100.*correct2/total_labelled2:.1f}%"
 
+        # LR scheduler step (monitors val total loss)
+        scheduler.step(vl)
+        current_lr = optimizer.param_groups[0]["lr"]
+
+        # Best-checkpoint tracking (only after min_epochs_for_best) and early stopping
+        if (epoch + 1) >= min_epochs_for_best and vl < best_val_loss:
+            best_val_loss = vl
+            best_epoch    = epoch + 1
+            best_state    = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            no_improve    = 0
+        else:
+            no_improve += 1
+
         if (epoch + 1) % error_print_period == 0:
             cls2_str = f" cls2={tc2:.4f}/{vc2:.4f}" if dual_mode else ""
             print(
                 f"SemiSup  epoch {epoch+1}/{epochs} | "
                 f"train total={tl:.4f} recon={tr:.4f} cls={tc:.4f}{cls2_str.replace('/', ' | val cls2=')} | "
-                f"val   total={vl:.4f} recon={vr:.4f} cls={vc:.4f}{acc_str}"
+                f"val   total={vl:.4f} recon={vr:.4f} cls={vc:.4f}{acc_str} | "
+                f"lr={current_lr:.2e} best_ep={best_epoch}"
             )
+
+        if early_stopping_patience > 0 and no_improve >= early_stopping_patience:
+            print(
+                f"SemiSup  early stopping at epoch {epoch+1} "
+                f"(no val improvement for {early_stopping_patience} epochs; "
+                f"best val={best_val_loss:.6f} at epoch {best_epoch})"
+            )
+            break
 
         if (epoch + 1) % recon_view_period == 0:
             fig = plot_reconstruction_progress(model, val_loader, device, epoch + 1)
             fig.savefig(os.path.join(result_dir, f"semisup_recon_ep{epoch+1}.png"))
             plt.close(fig)
             torch.save(model, os.path.join(result_dir, f"semisup_model_ep{epoch+1}.pt"))
+
+    # Restore best weights
+    if best_state is not None:
+        model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
+        print(f"SemiSup  restored best model from epoch {best_epoch} "
+              f"(val loss {best_val_loss:.6f})")
 
     save_arrays = [
         ("ss_train_total", train_losses), ("ss_val_total", val_losses),
@@ -747,8 +801,16 @@ def train_semisup_ae(
     for name, arr in save_arrays:
         joblib.dump(arr, os.path.join(result_dir, f"{name}.pkl"))
 
-    _save_loss_curves(train_losses, val_losses, epochs,
+    actual_epochs = len(train_losses)
+    _save_loss_curves(train_losses, val_losses, actual_epochs,
                       "SemiSup AE Total Loss", result_dir, "semisup")
+    _save_semisup_component_curves(
+        train_recon, val_recon,
+        train_cls,   val_cls,
+        train_cls2,  val_cls2,
+        result_dir,
+        dual_mode=dual_mode,
+    )
     return model, train_losses, val_losses
 
 
@@ -1061,4 +1123,54 @@ def _save_loss_curves(train_losses, val_losses, epochs, title, result_dir, prefi
     plt.xlabel("Epoch"); plt.ylabel("Loss")
     plt.title(title); plt.legend()
     fig.savefig(os.path.join(result_dir, f"{prefix}_train_val_loss.png"))
+    plt.close(fig)
+
+
+def _save_semisup_component_curves(
+    train_recon, val_recon,
+    train_cls,   val_cls,
+    train_cls2,  val_cls2,
+    result_dir,
+    dual_mode: bool = False,
+):
+    """Save per-component loss curves (recon / cls1 / cls2) for SemiSupAE.
+
+    Produces a single figure with one subplot per component so the relative
+    magnitudes and dynamics are easy to compare side-by-side.
+    """
+    epochs = len(train_recon)
+    xs = range(epochs)
+
+    n_panels = 3 if dual_mode else 2
+    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), sharey=False)
+
+    # --- Reconstruction ---
+    ax = axes[0]
+    ax.plot(xs, train_recon, label="Train")
+    ax.plot(xs, val_recon,   label="Val")
+    ax.set_title("Reconstruction loss")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.legend()
+
+    # --- Classification head 1 ---
+    ax = axes[1]
+    ax.plot(xs, train_cls, label="Train")
+    ax.plot(xs, val_cls,   label="Val")
+    ax.set_title("CLS-1 loss (FA type)" if dual_mode else "CLS loss")
+    ax.set_xlabel("Epoch")
+    ax.legend()
+
+    # --- Classification head 2 (dual mode only) ---
+    if dual_mode:
+        ax = axes[2]
+        ax.plot(xs, train_cls2, label="Train")
+        ax.plot(xs, val_cls2,   label="Val")
+        ax.set_title("CLS-2 loss (Position)")
+        ax.set_xlabel("Epoch")
+        ax.legend()
+
+    fig.suptitle("SemiSup AE – component losses", fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(os.path.join(result_dir, "semisup_component_losses.png"), dpi=150)
     plt.close(fig)
