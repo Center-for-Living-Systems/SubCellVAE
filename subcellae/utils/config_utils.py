@@ -25,7 +25,7 @@ def resolve_root(raw: dict, root_override: str | None = None) -> dict:
         A new dict with all ``root_folder + "/..."`` strings replaced by the
         resolved absolute path.
     """
-    root = root_override or raw.get("root_folder", "")
+    root = root_override or raw.get("root_folder", "") or raw.get("paths", {}).get("root_folder", "")
 
     def _resolve(val):
         if (
