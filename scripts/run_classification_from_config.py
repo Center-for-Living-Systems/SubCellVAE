@@ -26,13 +26,14 @@ from subcellae.pipeline.classification_pipeline import (
     ClassificationConfig,
     run_classification_pipeline,
 )
+from subcellae.utils.config_utils import resolve_root
 
 
 # ---------------------------------------------------------------------------
 # YAML → ClassificationConfig
 # ---------------------------------------------------------------------------
 
-def load_config(yaml_path: str | Path) -> ClassificationConfig:
+def load_config(yaml_path: str | Path, root_folder: str | None = None) -> ClassificationConfig:
     """Parse a YAML config file and return a :class:`ClassificationConfig`."""
     yaml_path = Path(yaml_path)
     if not yaml_path.exists():
@@ -40,6 +41,7 @@ def load_config(yaml_path: str | Path) -> ClassificationConfig:
 
     with open(yaml_path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
+    raw = resolve_root(raw, root_folder)
 
     def _get(section: str, key: str, default=None):
         return raw.get(section, {}).get(key, default)
@@ -125,6 +127,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity. Overrides the value in the YAML file if given.",
     )
+    p.add_argument(
+        "--root_folder", default=None,
+        help="Override root_folder for all paths. Useful when running on a different computer.",
+    )
     return p.parse_args(argv)
 
 
@@ -148,7 +154,7 @@ def main(argv: list[str] | None = None) -> None:
     log = logging.getLogger(__name__)
     log.info("Loading config from: %s", args.config)
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, root_folder=args.root_folder)
 
     if args.dry_run:
         print("\n=== DRY RUN – resolved ClassificationConfig ===")

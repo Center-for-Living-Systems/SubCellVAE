@@ -2,13 +2,13 @@
 # Analysis: AE: semisup_fa
 # Results: results/test_run/semisup_fa/analysis/
 # =============================================================================
-
+root_folder : "/home/lding/lding/fa_data_analysis"
 input:
-  latents_csv  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_fa/latents.csv"
+  latents_csv  : root_folder + "/ae_results/test_run/semisup_fa/latents.csv"
   split_filter : "all"
 
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_fa/analysis"
+  out_dir : root_folder + "/ae_results/test_run/semisup_fa/analysis"
 
 embedding:
   methods:

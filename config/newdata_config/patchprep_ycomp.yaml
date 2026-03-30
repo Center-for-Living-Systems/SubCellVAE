@@ -6,10 +6,11 @@
 # =============================================================================
 
 paths:
-  image_folder      : "/mnt/d/lding/FA/data/FA_ML_Annabel_20250217/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/Y-comp"
-  cell_mask_folder  : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/y_ch1_major/code_org_20250902_seg/mask"
-  patch_output_dir  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/patches/ycomp/tiff_patches32"
-  plot_output_dir   : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/patches/ycomp/plot_patches32"
+  root_folder : "/home/lding/lding/fa_data_analysis"
+  image_folder      : "/home/lding/lding/fa_data/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/Y-comp"
+  cell_mask_folder  : "/home/lding/lding/fa_analysis/pPax_analyis/ctrl_ch1_major/code_org_20250902_seg/mask"
+  patch_output_dir  : root_folder + "/ae_results/newdata_validation/patches/ycomp/tiff_patches32"
+  plot_output_dir   : root_folder + "/ae_results/newdata_validation/patches/ycomp/plot_patches32"
 
 experiment:
   condition : "ycomp"

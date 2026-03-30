@@ -9,10 +9,11 @@
 # Paths  (Windows paths; forward slashes work on both Windows and WSL/Linux)
 # ---------------------------------------------------------------------------
 paths:
-  image_folder      : "/mnt/d/lding/FA/data/FA_ML_Annabel_20250217/031125data/Control"
-  cell_mask_folder  : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/ctrl_ch1_major/code_org_20250820_seg/mask"   # non-null + non-empty → file mask used
-  patch_output_dir  : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_control"
-  plot_output_dir   : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_control"
+  root_folder       : "/home/lding/lding/fa_data_analysis"   # change ONLY this when switching computers
+  image_folder      : root_folder + "/fa_data/031125data/Control"
+  cell_mask_folder  : root_folder + "/fa_cellseg/031125analysis/control/code_org_20250820_seg/mask"   # non-null + non-empty → file mask used
+  patch_output_dir  : root_folder + "/ae_results/pax_ch_patch/patch_control"
+  plot_output_dir   : root_folder + "/ae_results/pax_ch_patch/plot_control"
 # ---------------------------------------------------------------------------
 # Experiment identity
 # ---------------------------------------------------------------------------

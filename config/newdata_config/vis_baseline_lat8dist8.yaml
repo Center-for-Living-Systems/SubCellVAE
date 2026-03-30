@@ -4,15 +4,15 @@
 # Note: umap_model_pkl is null → vis script fits fresh UMAP on lat8 features
 #       (the lat8dist8 UMAP model has 16-dim input, not compatible here).
 # =============================================================================
-
+root_folder : "/home/lding/lding/fa_data_analysis"
 input:
-  latents_csv          : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/baseline/latents_newdata.csv"
-  fa_type_results_csv  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/baseline/fa_cls_lat8dist8/predictions_all.csv"
-  position_results_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/baseline/pos_cls_lat8dist8/predictions_all.csv"
+  latents_csv          : root_folder + "/ae_results/newdata_validation/baseline/latents_newdata.csv"
+  fa_type_results_csv  : root_folder + "/ae_results/newdata_validation/baseline/fa_cls_lat8dist8/predictions_all.csv"
+  position_results_csv : root_folder + "/ae_results/newdata_validation/baseline/pos_cls_lat8dist8/predictions_all.csv"
   umap_model_pkl       : null   # fit fresh UMAP on lat8 features
 
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/baseline/vis_lat8dist8"
+  out_dir : root_folder + "/ae_results/newdata_validation/baseline/vis_lat8dist8"
 
 labels:
   fa_type_label_col  : "classification"    # not present in newdata → true-label plots skipped

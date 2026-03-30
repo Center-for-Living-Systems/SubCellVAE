@@ -1,17 +1,17 @@
 # =============================================================================
 # Cls Apply: fa-type | AE: baseline | Features: lat8
-# Results:   /mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/baseline/fa_cls_lat8/
+# Results:   /home/lding/lding/gitcode/SubCellAE/results/newdata_validation/baseline/fa_cls_lat8/
 # =============================================================================
-
+root_folder : "/home/lding/lding/fa_data_analysis"
 input:
-  latents_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/baseline/latents_newdata.csv"
+  latents_csv : root_folder + "/ae_results/newdata_validation/baseline/latents_newdata.csv"
 
 model:
-  model_pkl      : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run_overfit_20260322/baseline/fa_cls_lat8/lgbm_model.pkl"
-  umap_model_pkl : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run_overfit_20260322/baseline/fa_cls_lat8/umap_all_model.pkl"
+  model_pkl      : root_folder + "/ae_results/test_run_overfit_20260322/baseline/fa_cls_lat8/lgbm_model.pkl"
+  umap_model_pkl : root_folder + "/ae_results/test_run_overfit_20260322/baseline/fa_cls_lat8/umap_all_model.pkl"
 
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/newdata_validation/baseline/fa_cls_lat8"
+  out_dir : root_folder + "/ae_results/newdata_validation/baseline/fa_cls_lat8"
 
 labels:
   label_order:

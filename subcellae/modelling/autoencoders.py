@@ -621,6 +621,7 @@ def train_semisup_ae(
     weight_decay: float = 1e-4,          # L2 regularisation on all weights
     early_stopping_patience: int = 0,    # 0 = disabled; stop when val doesn't improve
     min_epochs_for_best: int = 200,      # ignore best-checkpoint tracking before this epoch
+    warmup_epochs: int = 200,            # epochs of recon-only before adding cls loss
 ):
     """
     Training loop for SemiSupAE.
@@ -644,6 +645,10 @@ def train_semisup_ae(
         Best-checkpoint tracking does not start until this epoch is reached.
         Prevents saving a degenerate early model as the "best".
         Set to 0 to track from the very first epoch.
+    warmup_epochs : int
+        Number of epochs to train with reconstruction loss only (classification
+        weights forced to 0).  After warmup, the configured ``lambda_cls`` /
+        ``lambda_cls2`` values are restored.  Default 200.
     A ``ReduceLROnPlateau`` scheduler (factor 0.5, patience 10) is always
     active; the learning rate is halved whenever val loss plateaus.
     """
@@ -668,6 +673,11 @@ def train_semisup_ae(
     recon_view_period  = max(1, epochs // 10)
 
     for epoch in range(epochs):
+        # Two-phase warmup: reconstruction-only for the first warmup_epochs epochs
+        in_warmup = warmup_epochs > 0 and epoch < warmup_epochs
+        eff_lambda_cls  = 0.0 if in_warmup else lambda_cls
+        eff_lambda_cls2 = 0.0 if in_warmup else lambda_cls2
+
         model.train()
         tl = tr = tc = tc2 = 0.0
         for batch in train_loader:
@@ -680,14 +690,14 @@ def train_semisup_ae(
                 loss, rl, cl, cl2 = semisup_ae_loss_dual(
                     x, recon, logits, labels, logits2, labels2,
                     lambda_recon=lambda_recon,
-                    lambda_cls=lambda_cls,
-                    lambda_cls2=lambda_cls2,
+                    lambda_cls=eff_lambda_cls,
+                    lambda_cls2=eff_lambda_cls2,
                 )
             else:
                 recon, _, logits = model(x)
                 loss, rl, cl = semisup_ae_loss(
                     x, recon, logits, labels,
-                    lambda_recon=lambda_recon, lambda_cls=lambda_cls,
+                    lambda_recon=lambda_recon, lambda_cls=eff_lambda_cls,
                 )
                 cl2 = 0.0
 
@@ -715,8 +725,8 @@ def train_semisup_ae(
                     loss, rl, cl, cl2 = semisup_ae_loss_dual(
                         x, recon, logits, labels, logits2, labels2,
                         lambda_recon=lambda_recon,
-                        lambda_cls=lambda_cls,
-                        lambda_cls2=lambda_cls2,
+                        lambda_cls=eff_lambda_cls,
+                        lambda_cls2=eff_lambda_cls2,
                     )
                     mask2 = labels2 >= 0
                     if mask2.any():
@@ -726,7 +736,7 @@ def train_semisup_ae(
                     recon, _, logits = model(x)
                     loss, rl, cl = semisup_ae_loss(
                         x, recon, logits, labels,
-                        lambda_recon=lambda_recon, lambda_cls=lambda_cls,
+                        lambda_recon=lambda_recon, lambda_cls=eff_lambda_cls,
                     )
                     cl2 = 0.0
 
@@ -764,8 +774,9 @@ def train_semisup_ae(
 
         if (epoch + 1) % error_print_period == 0:
             cls2_str = f" cls2={tc2:.4f}/{vc2:.4f}" if dual_mode else ""
+            phase_str = "[warmup] " if in_warmup else ""
             print(
-                f"SemiSup  epoch {epoch+1}/{epochs} | "
+                f"SemiSup  {phase_str}epoch {epoch+1}/{epochs} | "
                 f"train total={tl:.4f} recon={tr:.4f} cls={tc:.4f}{cls2_str.replace('/', ' | val cls2=')} | "
                 f"val   total={vl:.4f} recon={vr:.4f} cls={vc:.4f}{acc_str} | "
                 f"lr={current_lr:.2e} best_ep={best_epoch}"

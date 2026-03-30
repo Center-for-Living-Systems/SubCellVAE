@@ -6,25 +6,31 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
+# Root folder  –  change ONLY this when switching computers.
+# All data/result paths below are rooted here.
+# ---------------------------------------------------------------------------
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+# ---------------------------------------------------------------------------
 # Input
 # ---------------------------------------------------------------------------
 input:
   # latents.csv from the AE pipeline (used to load z_* features for UMAP)
-  latents_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/latents.csv"
+  latents_csv : root_folder + "/ae_results/ae_run/semisup/latents.csv"
 
   # predictions_all.csv saved by each classification pipeline run
-  fa_type_results_csv  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/FA_type_2L_lat8_classification/predictions_all.csv"
-  position_results_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/position_2L_classification_lat8/predictions_all.csv"
+  fa_type_results_csv  : root_folder + "/ae_results/ae_run/semisup/FA_type_2L_lat8_classification/predictions_all.csv"
+  position_results_csv : root_folder + "/ae_results/ae_run/semisup/position_2L_classification_lat8/predictions_all.csv"
 
   # Saved UMAP model from the FA-type classification run.
   # If this file does not exist, a new UMAP is fitted on z_* from latents_csv.
-  umap_model_pkl : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/FA_type_2L_lat8_classification/umap_all_model.pkl"
+  umap_model_pkl : root_folder + "/ae_results/ae_run/semisup/FA_type_2L_lat8_classification/umap_all_model.pkl"
 
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/cross_classification_vis"
+  out_dir : root_folder + "/ae_results/ae_run/semisup/cross_classification_vis"
 
 # ---------------------------------------------------------------------------
 # Labels

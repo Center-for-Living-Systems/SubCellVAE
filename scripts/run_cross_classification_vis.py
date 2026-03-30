@@ -65,6 +65,7 @@ from subcellae.utils.label_colors import (
     position_label_order,
     position_label_to_color,
 )
+from subcellae.utils.config_utils import resolve_root
 
 log = logging.getLogger(__name__)
 
@@ -88,12 +89,13 @@ class CrossVisConfig:
     log_level            : str  = "INFO"
 
 
-def load_config(yaml_path: str | Path) -> CrossVisConfig:
+def load_config(yaml_path: str | Path, root_folder: str | None = None) -> CrossVisConfig:
     yaml_path = Path(yaml_path)
     if not yaml_path.exists():
         raise FileNotFoundError(f"Config not found: {yaml_path}")
     with open(yaml_path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
+    raw = resolve_root(raw, root_folder)
 
     def _get(section, key, default=None):
         return raw.get(section, {}).get(key, default)
@@ -583,6 +585,10 @@ def main(argv: list[str] | None = None) -> None:
                    help="Print resolved config and exit without running.")
     p.add_argument("--log_level", default=None,
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    p.add_argument(
+        "--root_folder", default=None,
+        help="Override root_folder for all paths. Useful when running on a different computer.",
+    )
     args = p.parse_args(argv)
 
     with open(args.config, "r", encoding="utf-8") as fh:
@@ -591,7 +597,7 @@ def main(argv: list[str] | None = None) -> None:
     _setup_logging(args.log_level or yaml_level)
 
     log.info("Loading config from: %s", args.config)
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, root_folder=args.root_folder)
 
     if args.dry_run:
         print("\n=== DRY RUN – resolved CrossVisConfig ===")

@@ -5,17 +5,23 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
+# Root folder  –  change ONLY this when switching computers.
+# All data/result paths below are rooted here.
+# ---------------------------------------------------------------------------
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+# ---------------------------------------------------------------------------
 # Input
 # ---------------------------------------------------------------------------
 input:
-  latents_csv  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/latents.csv"
+  latents_csv  : root_folder + "/ae_results/ae_run/semisup/latents.csv"
   split_filter : "all"    # "all" | "train" | "val"
 
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup/analysis"
+  out_dir : root_folder + "/ae_results/ae_run/semisup/analysis"
 
 # ---------------------------------------------------------------------------
 # Embedding

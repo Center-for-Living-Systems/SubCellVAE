@@ -2,18 +2,18 @@
 # AE variant: baseline  (standard convolutional AE, no label supervision)
 # Results: results/test_run/baseline/
 # =============================================================================
-
+root_folder : "/home/lding/lding/fa_data_analysis"
 data:
   patch_dirs:
-    - path           : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_control_20260318_2318"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_control"
       condition      : 0
       condition_name : "control"
-    - path           : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_ycomp_20260318_2325"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_ycomp"
       condition      : 1
       condition_name : "ycomp"
 
 output:
-  result_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/baseline"
+  result_dir : root_folder + "/ae_results/test_run/baseline"
 
 model:
   model_type   : "ae"

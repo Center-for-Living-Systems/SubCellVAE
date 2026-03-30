@@ -27,13 +27,14 @@ except ImportError:
     raise ImportError("PyYAML is required: pip install pyyaml")
 
 from subcellae.pipeline.ae_pipeline import AEConfig, run_ae_pipeline
+from subcellae.utils.config_utils import resolve_root
 
 
 # ---------------------------------------------------------------------------
 # YAML → AEConfig
 # ---------------------------------------------------------------------------
 
-def load_config(yaml_path: str | Path) -> AEConfig:
+def load_config(yaml_path: str | Path, root_folder: str | None = None) -> AEConfig:
     """Parse a YAML config file and return an :class:`AEConfig`.
 
     Parameters
@@ -51,6 +52,7 @@ def load_config(yaml_path: str | Path) -> AEConfig:
 
     with open(yaml_path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
+    raw = resolve_root(raw, root_folder)
 
     def _get(section: str, key: str, default=None):
         return raw.get(section, {}).get(key, default)
@@ -118,6 +120,7 @@ def load_config(yaml_path: str | Path) -> AEConfig:
     weight_decay              = float(_get("training", "weight_decay",              1e-4))
     early_stopping_patience   = int(_get("training",   "early_stopping_patience",  0))
     min_epochs_for_best       = int(_get("training",   "min_epochs_for_best",       200))
+    warmup_epochs             = int(_get("training",   "warmup_epochs",             200))
 
     # ---- reconstruction ----
     save_recon       = bool(_get("reconstruction", "save_recon",       True))
@@ -156,6 +159,7 @@ def load_config(yaml_path: str | Path) -> AEConfig:
         weight_decay=weight_decay,
         early_stopping_patience=early_stopping_patience,
         min_epochs_for_best=min_epochs_for_best,
+        warmup_epochs=warmup_epochs,
         save_recon=save_recon,
         recon_pad_size=recon_pad_size,
         recon_image_size=recon_image_size,
@@ -197,6 +201,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity. Overrides the value in the YAML file if given.",
     )
+    p.add_argument(
+        "--root_folder", default=None,
+        help="Override root_folder for all paths. Useful when running on a different computer.",
+    )
     return p.parse_args(argv)
 
 
@@ -221,7 +229,7 @@ def main(argv: list[str] | None = None) -> None:
     log = logging.getLogger(__name__)
     log.info("Loading config from: %s", args.config)
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, root_folder=args.root_folder)
 
     if args.dry_run:
         print("\n=== DRY RUN – resolved AEConfig ===")

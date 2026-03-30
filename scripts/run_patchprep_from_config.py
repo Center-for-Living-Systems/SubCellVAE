@@ -20,7 +20,7 @@ import argparse
 import logging
 import shutil
 import sys
-from datetime import datetime
+
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -32,13 +32,14 @@ except ImportError:
     raise ImportError("PyYAML is required: pip install pyyaml")
 
 from subcellae.pipeline.patchprep_pipeline import PipelineConfig, run_pipeline
+from subcellae.utils.config_utils import resolve_root
 
 
 # ---------------------------------------------------------------------------
 # YAML → PipelineConfig
 # ---------------------------------------------------------------------------
 
-def load_config(yaml_path: str | Path) -> PipelineConfig:
+def load_config(yaml_path: str | Path, root_folder: str | None = None) -> PipelineConfig:
     """Parse a YAML config file and return a :class:`PipelineConfig`.
 
     Parameters
@@ -56,31 +57,19 @@ def load_config(yaml_path: str | Path) -> PipelineConfig:
 
     with open(yaml_path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
+    raw = resolve_root(raw, root_folder)
 
     # ---- convenience alias so we can write raw[section][key] safely ----
     def _get(section: str, key: str, default=None):
         return raw.get(section, {}).get(key, default)
 
     # ---- paths ----
-    # By default a timestamp suffix is appended to output dirs so each run
-    # produces a uniquely-named folder.  Set ``misc.use_timestamp: false`` in
-    # the YAML to disable this (useful when downstream configs need fixed paths).
-    use_timestamp = bool(_get("misc", "use_timestamp", True))
-    time_str = datetime.now().strftime("%Y%m%d_%H%M")
-
     image_folder      = Path(_get("paths", "image_folder"))
     raw_cell_mask     = _get("paths", "cell_mask_folder")   # may be None
     cell_mask_folder  = Path(raw_cell_mask) if raw_cell_mask is not None else None
 
-    base_patch_dir   = _get("paths", "patch_output_dir")
-    base_plot_dir    = _get("paths", "plot_output_dir")
-
-    if use_timestamp:
-        patch_output_dir = Path(f"{base_patch_dir}_{time_str}")
-        plot_output_dir  = Path(f"{base_plot_dir}_{time_str}")
-    else:
-        patch_output_dir = Path(base_patch_dir)
-        plot_output_dir  = Path(base_plot_dir)
+    patch_output_dir = Path(_get("paths", "patch_output_dir"))
+    plot_output_dir  = Path(_get("paths", "plot_output_dir"))
 
     # ---- build and return ----
     return PipelineConfig(
@@ -155,6 +144,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity. Overrides the value in the YAML file if given.",
     )
+    p.add_argument(
+        "--root_folder", default=None,
+        help="Override root_folder for all paths. Useful when running on a different computer.",
+    )
     return p.parse_args(argv)
 
 
@@ -180,7 +173,7 @@ def main(argv: list[str] | None = None) -> None:
     log = logging.getLogger(__name__)
     log.info("Loading config from: %s", args.config)
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, root_folder=args.root_folder)
 
     if args.dry_run:
         print("\n=== DRY RUN – resolved PipelineConfig ===")

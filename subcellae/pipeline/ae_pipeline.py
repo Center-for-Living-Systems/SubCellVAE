@@ -199,6 +199,7 @@ class AEConfig:
     weight_decay: float          = 1e-4   # Adam L2 weight decay
     early_stopping_patience: int = 0      # 0 = disabled
     min_epochs_for_best: int     = 200    # best-checkpoint tracking starts at this epoch
+    warmup_epochs: int           = 200    # recon-only phase before adding cls loss
 
     # --- reconstruction output ---
     save_recon: bool       = True   # whether to write reconstruction images
@@ -827,6 +828,7 @@ def run_ae_pipeline(cfg: AEConfig):
             weight_decay=cfg.weight_decay,
             early_stopping_patience=cfg.early_stopping_patience,
             min_epochs_for_best=cfg.min_epochs_for_best,
+            warmup_epochs=cfg.warmup_epochs,
         )
 
     else:  # "contrastive"

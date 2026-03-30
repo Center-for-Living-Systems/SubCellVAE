@@ -2,16 +2,16 @@
 # Classification: FA type | AE: semisup_both | Features: latent 8-dim only
 # Results: results/test_run/semisup_both/fa_cls_lat8/
 # =============================================================================
-
+root_folder : "/home/lding/lding/fa_data_analysis"
 input:
-  latents_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_both/latents.csv"
+  latents_csv : root_folder + "/ae_results/test_run/semisup_both/latents.csv"
 
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_both/fa_cls_lat8"
+  out_dir : root_folder + "/ae_results/test_run/semisup_both/fa_cls_lat8"
 
 labels:
   label_col    : "classification"
-  label_csv    : "/mnt/d/lding/FA/analysis_results/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  label_csv    : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
   filename_col : "unique_ID"
   label_order  :
     - "Nascent Adhesion"

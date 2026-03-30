@@ -5,6 +5,12 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
+# Root folder  –  change ONLY this when switching computers.
+# All data/result paths below are rooted here.
+# ---------------------------------------------------------------------------
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+# ---------------------------------------------------------------------------
 # Data  –  list every patch directory you want to train on.
 #
 # Each entry requires:
@@ -16,10 +22,10 @@
 # ---------------------------------------------------------------------------
 data:
   patch_dirs:
-    - path           : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_control_20260318_2318"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_control"
       condition      : 0
       condition_name : "control"
-    - path           : "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/patch_ycomp_20260318_2325"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_ycomp"
       condition      : 1
       condition_name : "ycomp"
 
@@ -27,7 +33,7 @@ data:
 # Output
 # ---------------------------------------------------------------------------
 output:
-  result_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup_position"
+  result_dir : root_folder + "/ae_results/ae_run/semisup_position"
   # Checkpoints, loss curve PNGs, and model_final.pt are written here.
 
 # ---------------------------------------------------------------------------
@@ -78,7 +84,7 @@ model:
 # ---------------------------------------------------------------------------
 
 annotation:
-  annotation_file : "/mnt/d/lding/FA/analysis_results/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"   # CSV or .xlsx
+  annotation_file : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"   # CSV or .xlsx
   label_col       : "classification"               # primary label column (FA type)
   filename_col    : "unique_ID"                    # column that holds patch basenames
   label_order     :                                # defines class 0, 1, 2, ...
@@ -92,7 +98,7 @@ annotation:
   # ---- second label (dual semi-sup) ----
   # Set annotation_file_2 (same CSV is fine) and lambda_cls_2 > 0 in [model]
   # to train with both FA-type and Position classification losses simultaneously.
-  annotation_file_2 : "/mnt/d/lding/FA/analysis_results/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  annotation_file_2 : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
   label_col_2       : "Position"
   filename_col_2    : "unique_ID"
   label_order_2     :
@@ -116,6 +122,7 @@ training:
   weight_decay            : 0.0001   # Adam L2 regularisation
   early_stopping_patience : 0        # 0 = disabled; run all 500 epochs
   min_epochs_for_best     : 200      # best-checkpoint tracking starts at epoch 200
+  warmup_epochs           : 200      # recon-only phase before adding cls loss (0 = disabled)
 
 # ---------------------------------------------------------------------------
 # Reconstruction output

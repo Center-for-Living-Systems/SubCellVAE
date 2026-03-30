@@ -5,13 +5,19 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
+# Root folder  –  change ONLY this when switching computers.
+# All data/result paths below are rooted here.
+# ---------------------------------------------------------------------------
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+# ---------------------------------------------------------------------------
 # Input / Output
 # ---------------------------------------------------------------------------
 input:
-  latents_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup_position/latents.csv"
+  latents_csv : root_folder + "/ae_results/ae_run/semisup_position/latents.csv"
 
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/ae_run/semisup_position/position_classification_lat8"
+  out_dir : root_folder + "/ae_results/ae_run/semisup_position/position_classification_lat8"
 
 # ---------------------------------------------------------------------------
 # Labels
@@ -21,7 +27,7 @@ labels:
   label_col   : "Position"
 
   # Optional: path to an external CSV / Excel with labels.
-  label_csv : "/mnt/d/lding/FA/analysis_results/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  label_csv : root_folder +"/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
 
   # Column used to join external label_csv to latents.csv (both must have it).
   filename_col: "unique_ID"
@@ -80,8 +86,8 @@ dist_features:
   # filename.  Leave as null / [] to use latent features only.
   patch_prep_dirs: null
   # patch_prep_dirs:
-  #   - "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_control_20260321_2300"
-  #   - "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_ycomp_20260321_2255"
+  #   - root_folder + "/ae_results/pax_ch_patch/plot_control"
+  #   - root_folder + "/ae_results/pax_ch_patch/plot_ycomp"
 
   # Multiplicative weight for d* columns before classification and UMAP.
   feature_weight: 20.0

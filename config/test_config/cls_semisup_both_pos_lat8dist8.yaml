@@ -2,16 +2,16 @@
 # Classification: Position | AE: semisup_both | Features: latent 8-dim + dist 8-dim
 # Results: results/test_run/semisup_both/pos_cls_lat8dist8/
 # =============================================================================
-
+root_folder : "/home/lding/lding/fa_data_analysis"
 input:
-  latents_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_both/latents.csv"
+  latents_csv : root_folder + "/ae_results/test_run/semisup_both/latents.csv"
 
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_both/pos_cls_lat8dist8"
+  out_dir : root_folder + "/ae_results/test_run/semisup_both/pos_cls_lat8dist8"
 
 labels:
   label_col    : "Position"
-  label_csv    : "/mnt/d/lding/FA/analysis_results/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  label_csv    : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
   filename_col : "unique_ID"
   label_order  :
     - "Cell Protruding Edge"
@@ -39,8 +39,8 @@ lightgbm:
 
 dist_features:
   patch_prep_dirs:
-    - "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_control_20260321_2300"
-    - "/mnt/d/lding/FA/analysis_results/FA_ML_Annabel_20250217/031125/pax_ch_patch/plot_ycomp_20260321_2255"
+    - root_folder + "/ae_results/pax_ch_patch/plot_control"
+    - root_folder + "/ae_results/pax_ch_patch/plot_ycomp"
   feature_weight : 20.0
 
 patch_sort:

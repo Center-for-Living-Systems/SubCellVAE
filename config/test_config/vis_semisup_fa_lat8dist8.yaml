@@ -2,15 +2,15 @@
 # Visualization: AE: semisup_fa | Features: latent 8-dim + dist 8-dim
 # Results: results/test_run/semisup_fa/vis_lat8dist8/
 # =============================================================================
-
+root_folder : "/home/lding/lding/fa_data_analysis"
 input:
-  latents_csv          : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_fa/latents.csv"
-  fa_type_results_csv  : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_fa/fa_cls_lat8dist8/predictions_all.csv"
-  position_results_csv : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_fa/pos_cls_lat8dist8/predictions_all.csv"
-  umap_model_pkl       : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_fa/fa_cls_lat8dist8/umap_all_model.pkl"
+  latents_csv          : root_folder + "/ae_results/test_run/semisup_fa/latents.csv"
+  fa_type_results_csv  : root_folder + "/ae_results/test_run/semisup_fa/fa_cls_lat8dist8/predictions_all.csv"
+  position_results_csv : root_folder + "/ae_results/test_run/semisup_fa/pos_cls_lat8dist8/predictions_all.csv"
+  umap_model_pkl       : root_folder + "/ae_results/test_run/semisup_fa/fa_cls_lat8dist8/umap_all_model.pkl"
 
 output:
-  out_dir : "/mnt/d/lding/CLS_GitHub/SubCellAE/results/test_run/semisup_fa/vis_lat8dist8"
+  out_dir : root_folder + "/ae_results/test_run/semisup_fa/vis_lat8dist8"
 
 labels:
   fa_type_label_col  : "classification"
