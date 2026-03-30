@@ -21,7 +21,7 @@ set -euo pipefail
 # Change ROOT_FOLDER when working on a different computer.
 # ---------------------------------------------------------------------------
 ROOT_FOLDER="/home/lding/lding/fa_data_analysis"
-PYTHON="conda run -n subcellae-cuda python"
+PYTHON="python"  # activate subcellae-cuda conda env before running this script
 CFG="config/test_config"
 
 echo "======================================================================"
