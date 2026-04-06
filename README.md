@@ -11,6 +11,8 @@ The pipeline has four sequential stages, each driven by a YAML config file and a
 | 3. Latent analysis | `scripts/run_analysis_from_config.py` | `config/config_analysis.yaml` |
 | 4. Classification | `scripts/run_classification_from_config.py` | `config/config_classification.yaml` |
 
+Additional pipelines for applying trained models to new data and for cross-classification visualization are described below.
+
 ---
 
 ## Setup
@@ -41,7 +43,7 @@ Both environments install the package in editable mode (`pip install -e .`) so l
 subcellae/
   dataprep/         patch extraction and preprocessing helpers
   modelling/
-    autoencoders.py   AE / VAE32 / SemiSupAE / ContrastiveAE models + training loops
+    autoencoders.py   AE / VAE32 / SemiSupAE / ContrastiveAE / SupConAE models + training loops
     dataset.py        PatchDataset (unified, annotation-aware)
   clustering/       KMeans and DBSCAN utilities
   classification/   helper functions for sklearn-based classifiers
@@ -51,8 +53,10 @@ subcellae/
   pipeline/
     patchprep_pipeline.py     Stage 1 orchestration
     ae_pipeline.py            Stage 2 orchestration
-    analysis_pipeline.py      Stage 3 orchestration
+    analysis_pipeline.py      Stage 3 orchestration (also used for newdata analysis)
     classification_pipeline.py Stage 4 orchestration
+    ae_apply_pipeline.py      Apply trained AE to new data → latents_newdata.csv
+    cls_apply_pipeline.py     Apply trained classifier to new-data latents → predictions_all.csv
 
 config/
   config_control_czi_dataset_norm.yaml   patch prep – CZI, per-dataset norm
@@ -61,12 +65,21 @@ config/
   config_ae.yaml                         autoencoder training
   config_analysis.yaml                   latent analysis
   config_classification.yaml             LightGBM classification
+  contrastive_config/                    configs for contrastive / supcon AE runs
+  newdata_config/                        configs for new-data validation pipeline
 
 scripts/
   run_patchprep_from_config.py
   run_ae_from_config.py
   run_analysis_from_config.py
   run_classification_from_config.py
+  run_ae_apply_from_config.py
+  run_cls_apply_from_config.py
+  run_cross_classification_vis.py
+  run_whole_image_overlay.py
+  run_newdata_validation.sh              end-to-end new-data validation pipeline
+  run_supcon.sh                          supervised contrastive AE pipeline
+  run_supcon_noflip.sh                   supervised contrastive AE (noise-only, no flip)
 ```
 
 ---
@@ -83,12 +96,13 @@ For each accepted patch the pipeline also computes **8 rotation- and scale-invar
 |-----|-------------|
 | `file_type` | `"czi"` or `"npy"` |
 | `cell_mask_folder` | path to pre-computed segmentation masks; omit or leave null for on-the-fly segmentation |
-| `norm_mode` | `"image"` · `"dataset"` · `null` |
+| `norm_mode` | `null` · `"image"` · `"dataset"` · `"cell_insideoutside"` |
 | `patch_size` | side length in pixels (e.g. `32`) |
 | `patch_prefix` | string prepended to every patch filename (e.g. `"control"`) |
 | `major_ch` | channel index used for patch detection |
 | `norm_channels` | channels to normalise (must include `major_ch`) |
 | `n_dist_orientations` | number of ray directions for distance features (default `8`) |
+| `use_timestamp` | `false` keeps output paths fixed for downstream configs |
 
 **Run:**
 
@@ -116,7 +130,7 @@ data_prep_record_{condition}_ch{ch}_f_{start}_to_{end}.csv
 
 ## Stage 2 — Autoencoder Training
 
-Trains one of four model types on the extracted patches, then saves the trained model, loss curves, a latent feature CSV, and reconstruction images.
+Trains one of several model types on the extracted patches, then saves the trained model, loss curves, a latent feature CSV, and reconstruction images.
 
 ### Model types
 
@@ -125,9 +139,10 @@ Trains one of four model types on the extracted patches, then saves the trained 
 | `"ae"` | Standard convolutional autoencoder |
 | `"vae"` | Variational AE / β-VAE (VAE32); uses `mu` as latent |
 | `"semisup"` | Semi-supervised AE with a classification head trained on annotated patches |
-| `"contrastive"` | Contrastive AE with NT-Xent loss |
+| `"contrastive"` | Contrastive AE with NT-Xent self-supervised loss; supports random flips and salt-and-pepper noise augmentation |
+| `"supcon"` | Supervised contrastive AE — for labelled anchors, positives are all same-class patches in the batch; for unlabelled, falls back to NT-Xent with the paired augmented view |
 
-Switch between them by editing `model.model_type` in `config/config_ae.yaml`.
+Switch between them by editing `model.model_type` in the YAML config.
 
 ### Key config sections
 
@@ -139,11 +154,17 @@ data:
       condition_name: "control"
 
 model:
-  model_type   : "ae"    # ae | vae | semisup | contrastive
+  model_type   : "ae"    # ae | vae | semisup | contrastive | supcon
   latent_dim   : 8
   input_ps     : 32
+  # Contrastive / supcon options:
+  noise_prob        : 0.05    # salt-and-pepper noise probability
+  use_flip          : true    # random H/V flips (set false for noise-only ablation)
+  temperature       : 0.5
+  lambda_contrast   : 0.5
+  proj_dim          : 64
 
-annotation:              # required for semisup; used by all models for CSV labels
+annotation:              # required for semisup / supcon; used by all models for CSV labels
   annotation_file: "/path/to/labels.csv"
   label_col      : "classification"
   filename_col   : "unique_ID"
@@ -175,7 +196,7 @@ loss_curve.png
 recon/
   patches/                # raw_{split}_{name}.tif  &  recon_{split}_{name}.tif
   images/                 # raw_{group}.tif  &  recon_{group}.tif  (fixed canvas)
-  visual/                 # {group}_comparison.png  (suptitle = group [train|val])
+  visual/                 # {group}_comparison.png  (side-by-side raw vs reconstruction)
 ```
 
 > **Note on filename convention** — patch files use an underscore before the coordinate block (`control_f0001x…`) while annotation CSVs use a hyphen (`control-f0001x…`). The dataset loader and classification pipeline both normalise this automatically.
@@ -197,6 +218,7 @@ embedding:
   methods: [UMAP]           # UMAP and/or PHATE
   umap_n_neighbors: 15
   umap_min_dist   : 0.1
+  umap_model_pkl  : null    # provide path to reuse a pre-trained UMAP (e.g. for newdata)
 
 clustering:
   kmeans_enabled   : true
@@ -208,6 +230,8 @@ label_orders:
   annotation_label_name: [...]
   condition_name        : [...]
 ```
+
+When `umap_model_pkl` points to an existing `umap_all_model.pkl` (saved by the classification stage), the analysis stage calls `.transform()` instead of re-fitting, projecting new data into the same 2-D space as the training data.
 
 **Run:**
 
@@ -229,6 +253,7 @@ norm_mse_distribution.png · norm_mse_by_condition_split.png · ...
 intensity_vs_latent.png     # mean_intensity vs each z_i scatter + Pearson r
 analysis_results.csv        # latents.csv augmented with UMAP coords + cluster labels
 kmeans_model.pkl
+umap_model.pkl              # saved only when a new UMAP is fitted
 ```
 
 ---
@@ -241,8 +266,8 @@ Trains a LightGBM classifier on latent features (`z_*`) and optionally on combin
 
 | Mode | Feature set | Typical `out_dir` name |
 |------|-------------|------------------------|
-| Latent only | `z_0`…`z_{N-1}` | `fa_type_classification` |
-| Latent + distance | `z_0`…`z_{N-1}` + `d00`…`d07` | `fa_type_classification_lat_dist` |
+| Latent only | `z_0`…`z_{N-1}` | `fa_cls_lat8` |
+| Latent + distance | `z_0`…`z_{N-1}` + `d00`…`d07` | `fa_cls_lat8dist8` |
 
 Distance features come from the `data_prep_record_*_to_<N>.csv` files written in Stage 1.  The pipeline finds the file with the largest `N` in each supplied directory, concatenates them, and merges on `crop_img_filename`.  Because the normalised distances are on a 0–1 ratio scale while latent dimensions are larger in magnitude, a `feature_weight` multiplier (default `100`) is applied to all `d*` columns before both the classifier and UMAP.
 
@@ -293,24 +318,160 @@ python scripts/run_classification_from_config.py config/config_classification.ya
 
 ```
 lgbm_model.pkl
+umap_all_model.pkl                  # UMAP fitted on full feature set (lat or lat+dist)
 metrics.txt                         # accuracy · balanced accuracy · F1 · CV summary
 metrics.csv                         # per-class precision / recall / F1
 confusion_matrix_counts_train.png
 confusion_matrix_norm_train.png
 confusion_matrix_counts_val.png
 confusion_matrix_norm_val.png
-feature_importance.png              # split and gain importance for each feature
+feature_importance.png
 f1_per_class.png
-prob_by_true_class.png              # max predicted probability by true class
-classification_results.csv          # all labelled rows with predicted label + probabilities
-umap_predicted_label.png            # all patches coloured by predicted FA type (tab10)
-umap_true_label.png                 # labelled patches coloured by ground-truth FA type
-umap_all_model.pkl                  # fitted UMAP model
+prob_by_true_class.png
+classification_results.csv
+umap_predicted_label.png
+umap_true_label.png
 patch_sort/
-  train/gt{x}pred{y}/               # labelled training patches
-  val/gt{x}pred{y}/                 # labelled validation patches
-  test/gtnpred{y}/                  # unlabelled patches (if sort_unlabelled: true)
+  train/gt{x}pred{y}/
+  val/gt{x}pred{y}/
+  test/gtnpred{y}/
 ```
+
+---
+
+## New-Data Validation Pipeline
+
+Applies a set of **frozen, pre-trained** AE models and classifiers to new experimental data without any retraining.  The full pipeline is orchestrated by `scripts/run_newdata_validation.sh`.
+
+### Stages
+
+| Stage | Script | What it does |
+|-------|--------|--------------|
+| 1. Patch prep | `run_patchprep_from_config.py` | Extract patches from new CZI files |
+| 2. AE apply | `run_ae_apply_from_config.py` | Encode patches → `latents_newdata.csv`; optionally save reconstruction visuals |
+| 3. Analysis | `run_analysis_from_config.py` | UMAP / clustering on new latents (uses pre-trained UMAP via `umap_model_pkl`) |
+| 4. Cls apply | `run_cls_apply_from_config.py` | Predict labels with trained LightGBM → `predictions_all.csv` |
+| 5. Cross-vis | `run_cross_classification_vis.py` | UMAP + crosstab plots; confusion matrices with accuracy when ground-truth labels are supplied |
+| 6. Overlay | `run_whole_image_overlay.py` | Whole-image PNG with coloured bounding boxes per predicted label |
+
+### AE apply (`run_ae_apply_from_config.py`)
+
+```yaml
+reconstruction:
+  save_recon       : true    # set true to produce recon/visual/ comparison PNGs
+  recon_pad_size   : 64
+  recon_image_size : 1024
+```
+
+Outputs `latents_newdata.csv` (same columns as `latents.csv` but with `split = "newdata"`) and, when `save_recon: true`:
+
+```
+recon/
+  visual/    # {group}_comparison.png  — raw vs reconstruction side-by-side
+  images/    # raw_{group}.tif  &  recon_{group}.tif
+  patches/   # per-patch raw_*.tif  &  recon_*.tif
+```
+
+### Cls apply (`run_cls_apply_from_config.py`)
+
+```yaml
+model:
+  model_pkl      : "/path/to/lgbm_model.pkl"
+  umap_model_pkl : "/path/to/umap_all_model.pkl"   # reuse training-data UMAP space
+
+labels:
+  label_order:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - ...
+```
+
+Predicted labels are always stored as **string class names** in `predictions_all.csv` (`pred_label` column).  Outputs:
+
+```
+predictions_all.csv      # all patches + pred_label + per-class probabilities
+umap_pred.png            # UMAP coloured by predicted label
+umap_condition.png       # UMAP coloured by condition
+pred_distribution.png    # bar chart of predicted-label counts
+```
+
+### Cross-classification vis (`run_cross_classification_vis.py`)
+
+Merges FA-type and position classifier predictions, builds UMAP using a pre-trained model (`.transform()`), and generates crosstab heatmaps.
+
+When an `annotation_csv` is provided (optional), true labels are joined on `crop_img_filename` and per-classifier **confusion matrices with accuracy** are added:
+
+```yaml
+input:
+  umap_model_pkl   : "/path/to/umap_all_model.pkl"   # pre-trained UMAP from training run
+  annotation_csv   : "/path/to/labels.csv"            # optional ground-truth for newdata
+```
+
+The annotation join normalises filenames with a regex (`f\d+x\d+y\d+ps\d+\.tif`) so condition prefixes like `ctrl_ch1_` are stripped automatically.
+
+Additional outputs when true labels are available:
+
+```
+confusion_fa_type_{subset}.png        # true vs predicted FA type (counts), accuracy in title
+confusion_fa_type_norm_{subset}.png   # row-normalised version
+confusion_position_{subset}.png       # true vs predicted position
+confusion_position_norm_{subset}.png
+```
+
+### Whole-image overlay (`run_whole_image_overlay.py`)
+
+Reads `predictions_all.csv`, assembles a raw-patch canvas per source image, and draws coloured bounding boxes by predicted label.
+
+```yaml
+input:
+  predictions_csv : "/path/to/predictions_all.csv"
+labels:
+  label_order: [...]   # determines colour assignment
+misc:
+  pad_size   : 64
+  image_size : 1024
+  linewidth  : 0.6
+  dpi        : 300
+```
+
+Output: one PNG per source image → `overlay_{condition}_{img_id}.png`
+
+### Config layout for newdata
+
+```
+config/newdata_config/
+  patchprep_control.yaml          patchprep_ycomp.yaml
+  ae_apply_baseline.yaml          ae_apply_semisup_fa.yaml
+  ae_apply_semisup_both.yaml
+  analysis_baseline.yaml          analysis_semisup_fa.yaml
+  analysis_semisup_both.yaml
+  cls_apply_{ae}_{target}_{feat}.yaml   # 12 combinations
+  vis_{ae}_{feat}.yaml                  # 5 active combinations
+  overlay_{ae}_{target}_{feat}.yaml     # 12 combinations
+```
+
+---
+
+## Contrastive / Supervised Contrastive AE
+
+`config/contrastive_config/` contains configs for three comparable AE variants:
+
+| Variant | Config | Description |
+|---------|--------|-------------|
+| `contrastive` | `ae_contrastive.yaml` | NT-Xent self-supervised loss |
+| `supcon` | `ae_supcon.yaml` | Supervised contrastive loss + H/V flips + noise |
+| `supcon_noflip` | `ae_supcon_noflip.yaml` | Supervised contrastive loss + noise only (`use_flip: false`) |
+
+Run the full 4-stage pipeline for each variant:
+
+```bash
+bash scripts/run_supcon.sh         # supcon with flips
+bash scripts/run_supcon_noflip.sh  # supcon noise-only (ablation)
+```
+
+### Supervised contrastive loss
+
+For labelled anchors, positives = all same-class patches in the 2N-sized batch (original + augmented view).  For unlabelled patches, positives = only the paired augmented view (NT-Xent fallback).  The `use_flip` flag controls whether random horizontal/vertical flips are applied in addition to salt-and-pepper noise.
 
 ---
 
@@ -321,7 +482,7 @@ patch_sort/
 python scripts/run_patchprep_from_config.py config/config_control_czi_dataset_norm.yaml
 python scripts/run_patchprep_from_config.py config/config_ycomp_czi_dataset_norm.yaml
 
-# 2. Train autoencoder (edit config_ae.yaml to select model_type)
+# 2. Train autoencoder (edit config to select model_type)
 python scripts/run_ae_from_config.py config/config_ae.yaml
 
 # 3. Analyse latent space
@@ -332,9 +493,12 @@ python scripts/run_classification_from_config.py config/config_classification.ya
 
 # 4b. Classify using latent + distance features (set dist_features.patch_prep_dirs in config)
 python scripts/run_classification_from_config.py config/config_classification.yaml
+
+# Apply trained models to new data
+bash scripts/run_newdata_validation.sh
 ```
 
-All four steps support `--dry_run` (prints resolved config without running) and `--log_level DEBUG`.
+All scripts support `--dry_run` (prints resolved config without running) and `--log_level DEBUG`.  Most also accept `--root_folder /path` to override all absolute paths for running on a different machine.
 
 ---
 

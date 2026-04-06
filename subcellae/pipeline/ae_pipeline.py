@@ -17,6 +17,7 @@ Supported model types (set via ``AEConfig.model_type``):
   ``"vae"``         – variational AE / beta-VAE (VAE32)
   ``"semisup"``     – semi-supervised AE with classification head (SemiSupAE)
   ``"contrastive"`` – contrastive AE with NT-Xent loss (ContrastiveAE)
+  ``"supcon"``      – supervised contrastive AE with SupCon loss (ContrastiveAE)
 
 All heavy-lifting model code lives in subcellae/modelling/autoencoders.py; this
 module only wires the pieces together.
@@ -42,17 +43,18 @@ import torch
 import torch.nn as nn
 from torch.utils.data import ConcatDataset, DataLoader, Subset, random_split
 
-from subcellae.modelling.dataset import PatchDataset
+from subcellae.modelling.dataset import PatchDataset, MultiChannelPatchDataset
 from subcellae.modelling.autoencoders import (
     AE, train_ae,
     VAE32, train_vae,
     SemiSupAE, train_semisup_ae,
     ContrastiveAE, train_contrastive_ae,
+    train_supervised_contrastive_ae,
 )
 
 log = logging.getLogger(__name__)
 
-_VALID_MODEL_TYPES = {"ae", "vae", "semisup", "contrastive"}
+_VALID_MODEL_TYPES = {"ae", "vae", "semisup", "contrastive", "supcon"}
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +76,7 @@ class AEConfig:
         from the annotation file, not from this field.
     model_type : str
         Which model to train: ``"ae"`` | ``"vae"`` | ``"semisup"`` |
-        ``"contrastive"``.
+        ``"contrastive"`` | ``"supcon"``.
 
     Model architecture
     ------------------
@@ -182,10 +184,12 @@ class AEConfig:
     lambda_cls_2: float    = 0.0     # 0.0 = single-label mode (backward-compat)
 
     # --- Contrastive-specific ---
-    proj_dim: int          = 64
-    noise_prob: float      = 0.05
-    temperature: float     = 0.5
-    lambda_contrast: float = 0.5
+    proj_dim: int                  = 64
+    noise_prob: float              = 0.05
+    temperature: float             = 0.5
+    lambda_contrast: float         = 0.5
+    use_flip: bool                 = True         # random H/V flips in augmentation
+    intensity_scale_range: tuple   = (0.8, 1.2)  # (low, high) intensity multiplier
 
     # --- training ---
     epochs: int         = 200
@@ -361,10 +365,13 @@ def _extract_latents(model, loader, device: str, model_type: str) -> dict:
             all_ann_labels_2.extend(ann_labels_2.tolist())
             all_latents.append(z.cpu().numpy())
 
-            # Store raw and recon as (H, W) float32 arrays
-            raw_np   = x.cpu().numpy()[:, 0, :, :]     # (B, H, W)
-            recon_np = x_hat.cpu().numpy()[:, 0, :, :] # (B, H, W)
+            # Store raw and recon: (H, W) for single-channel, (C, H, W) for multi
+            raw_np   = x.cpu().numpy()      # (B, C, H, W)
+            recon_np = x_hat.cpu().numpy()  # (B, C, H, W)
             for raw_patch, recon_patch in zip(raw_np, recon_np):
+                if raw_patch.shape[0] == 1:   # single-channel → squeeze to (H, W)
+                    raw_patch   = raw_patch[0]
+                    recon_patch = recon_patch[0]
                 all_raws.append(raw_patch.astype(np.float32))
                 all_recons.append(recon_patch.astype(np.float32))
 
@@ -506,6 +513,14 @@ def _save_reconstructions(
 
     pad = cfg.recon_pad_size
 
+    # Detect number of channels from the first available patch
+    _all_patches = train_result["raws"] or val_result["raws"]
+    n_ch = _all_patches[0].shape[0] if _all_patches and _all_patches[0].ndim == 3 else 1
+
+    def _get_ch(arr, ch):
+        """Return 2-D (H, W) slice for channel *ch* from a (C,H,W) or (H,W) array."""
+        return arr[ch] if arr.ndim == 3 else arr
+
     # ---- 1. save individual patch tifs and collect canvas info ----
     # canvas_data[group][split] = list of (y0, y1, x0, x1, raw, recon)
     canvas_data: dict = defaultdict(lambda: defaultdict(list))
@@ -516,7 +531,7 @@ def _save_reconstructions(
             raw_p   = result["raws"][i]
             recon_p = result["recons"][i]
 
-            # save individual patch tifs
+            # save individual patch tifs (multi-channel saved as (C,H,W) tif)
             tifffile.imwrite(str(patch_dir / f"raw_{split_name}_{fname}"),   raw_p)
             tifffile.imwrite(str(patch_dir / f"recon_{split_name}_{fname}"), recon_p)
 
@@ -552,9 +567,9 @@ def _save_reconstructions(
         if not all_entries:
             continue
 
-        # fixed-size canvas; warn if any patch overflows
-        raw_canvas   = np.zeros((img_size, img_size), dtype=np.float32)
-        recon_canvas = np.zeros((img_size, img_size), dtype=np.float32)
+        # one canvas pair per channel
+        raw_canvases   = [np.zeros((img_size, img_size), dtype=np.float32) for _ in range(n_ch)]
+        recon_canvases = [np.zeros((img_size, img_size), dtype=np.float32) for _ in range(n_ch)]
 
         for r0, r1, c0, c1, raw_p, recon_p, _sp in all_entries:
             if r1 > img_size or c1 > img_size:
@@ -564,26 +579,31 @@ def _save_reconstructions(
                 )
                 r1 = min(r1, img_size)
                 c1 = min(c1, img_size)
-            raw_canvas[r0:r1, c0:c1]   = raw_p[:r1-r0, :c1-c0]
-            recon_canvas[r0:r1, c0:c1] = recon_p[:r1-r0, :c1-c0]
+            for ch in range(n_ch):
+                raw_canvases[ch][r0:r1, c0:c1]   = _get_ch(raw_p,   ch)[:r1-r0, :c1-c0]
+                recon_canvases[ch][r0:r1, c0:c1]  = _get_ch(recon_p, ch)[:r1-r0, :c1-c0]
 
-        tifffile.imwrite(str(image_dir / f"raw_{group}.tif"),   raw_canvas)
-        tifffile.imwrite(str(image_dir / f"recon_{group}.tif"), recon_canvas)
+        for ch in range(n_ch):
+            ch_suffix = f"_ch{ch}" if n_ch > 1 else ""
+            tifffile.imwrite(str(image_dir / f"raw{ch_suffix}_{group}.tif"),   raw_canvases[ch])
+            tifffile.imwrite(str(image_dir / f"recon{ch_suffix}_{group}.tif"), recon_canvases[ch])
 
         # determine split label for the suptitle (train / val / train+val)
         splits_present = sorted(split_entries.keys())
         split_label = "+".join(splits_present)
         suptitle = f"{group}  [{split_label}]"
 
-        # ---- 3. side-by-side PNG comparison ----
-        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        # ---- 3. side-by-side PNG comparison (one row per channel) ----
+        fig, axes = plt.subplots(n_ch, 2, figsize=(10, 5 * n_ch), squeeze=False)
         fig.suptitle(suptitle, fontsize=13, fontweight="bold")
-        axes[0].imshow(raw_canvas,   cmap="gray", vmin=0, vmax=1)
-        axes[0].set_title("Raw")
-        axes[0].axis("off")
-        axes[1].imshow(recon_canvas, cmap="gray", vmin=0, vmax=1)
-        axes[1].set_title("Reconstruction")
-        axes[1].axis("off")
+        for ch in range(n_ch):
+            ch_label = f" ch{ch}" if n_ch > 1 else ""
+            axes[ch, 0].imshow(raw_canvases[ch],   cmap="gray", vmin=0, vmax=1)
+            axes[ch, 0].set_title(f"Raw{ch_label}")
+            axes[ch, 0].axis("off")
+            axes[ch, 1].imshow(recon_canvases[ch], cmap="gray", vmin=0, vmax=1)
+            axes[ch, 1].set_title(f"Reconstruction{ch_label}")
+            axes[ch, 1].axis("off")
         fig.tight_layout()
         fig.savefig(str(visual_dir / f"{group}_comparison.png"), dpi=150)
         plt.close(fig)
@@ -619,10 +639,16 @@ def run_ae_pipeline(cfg: AEConfig):
     log.info("  patch_dirs    : %d director%s",
              len(cfg.patch_dirs), "y" if len(cfg.patch_dirs) == 1 else "ies")
     for entry in cfg.patch_dirs:
-        log.info("    path=%-50s  condition=%s (%s)",
-                 entry.get("path", "?"),
-                 entry.get("condition", entry.get("label", "?")),
-                 entry.get("condition_name", ""))
+        if "channel_dirs" in entry:
+            log.info("    channel_dirs=%s  condition=%s (%s)",
+                     entry["channel_dirs"],
+                     entry.get("condition", "?"),
+                     entry.get("condition_name", ""))
+        else:
+            log.info("    path=%-50s  condition=%s (%s)",
+                     entry.get("path", "?"),
+                     entry.get("condition", entry.get("label", "?")),
+                     entry.get("condition_name", ""))
     log.info("  latent_dim=%d  input_ps=%d  no_ch=%d  BN=%s  dropout=%s",
              cfg.latent_dim, cfg.input_ps, cfg.no_ch, cfg.BN_flag, cfg.dropout_flag)
     log.info("  epochs=%d  lr=%g  batch_size=%d  val_split=%.2f",
@@ -643,9 +669,10 @@ def run_ae_pipeline(cfg: AEConfig):
                      cfg.num_classes, cfg.lambda_recon, cfg.lambda_cls)
         log.info("  [SemiSup reg] weight_decay=%g  early_stopping_patience=%d  min_epochs_for_best=%d",
                  cfg.weight_decay, cfg.early_stopping_patience, cfg.min_epochs_for_best)
-    elif cfg.model_type == "contrastive":
-        log.info("  [Contrastive] proj_dim=%d  noise_prob=%.3f  temperature=%.3f  "
+    elif cfg.model_type in ("contrastive", "supcon"):
+        log.info("  [%s] proj_dim=%d  noise_prob=%.3f  temperature=%.3f  "
                  "lambda_contrast=%.3f",
+                 cfg.model_type.upper(),
                  cfg.proj_dim, cfg.noise_prob, cfg.temperature, cfg.lambda_contrast)
 
     log.info("=" * 60)
@@ -660,33 +687,48 @@ def run_ae_pipeline(cfg: AEConfig):
 
     datasets = []
     for entry in cfg.patch_dirs:
-        path           = entry["path"]
         condition      = int(entry.get("condition", entry.get("label", 0)))
         condition_name = str(entry.get("condition_name", str(condition)))
-        ds = PatchDataset(
-            path,
-            condition=condition,
-            condition_name=condition_name,
-            annotation_file=cfg.annotation_file or None,
-            label_col=cfg.label_col,
-            filename_col=cfg.filename_col,
-            label_order=cfg.label_order,
-            annotation_file_2=cfg.annotation_file_2 or None,
-            label_col_2=cfg.label_col_2,
-            filename_col_2=cfg.filename_col_2,
-            label_order_2=cfg.label_order_2,
-            transform=_channel_expand,
+
+        shared_ann_kwargs = dict(
+            annotation_file   = cfg.annotation_file or None,
+            label_col         = cfg.label_col,
+            filename_col      = cfg.filename_col,
+            label_order       = cfg.label_order,
+            annotation_file_2 = cfg.annotation_file_2 or None,
+            label_col_2       = cfg.label_col_2,
+            filename_col_2    = cfg.filename_col_2,
+            label_order_2     = cfg.label_order_2,
         )
+
+        if "channel_dirs" in entry:
+            # Multi-channel: stack patches from each channel dir → (C, H, W)
+            ds = MultiChannelPatchDataset(
+                entry["channel_dirs"],
+                condition=condition,
+                condition_name=condition_name,
+                **shared_ann_kwargs,
+                # no transform: stacking already produces (C, H, W)
+            )
+        else:
+            ds = PatchDataset(
+                entry["path"],
+                condition=condition,
+                condition_name=condition_name,
+                **shared_ann_kwargs,
+                transform=_channel_expand,
+            )
+        path_display = entry.get("path") or entry.get("channel_dirs", "?")
         if cfg.annotation_file and ds.num_classes > 0:
             cfg.num_classes = ds.num_classes
             log.info("  Loaded %d patches from %s  condition=%d (%s)  "
                      "annotation1: %d classes via %r",
-                     len(ds), path, condition, condition_name,
+                     len(ds), path_display, condition, condition_name,
                      ds.num_classes, cfg.label_col)
             log.info("  Label1 mapping: %s", ds.label_to_int)
         else:
             log.info("  Loaded %d patches from %s  condition=%d (%s)",
-                     len(ds), path, condition, condition_name)
+                     len(ds), path_display, condition, condition_name)
         if cfg.annotation_file_2 and ds.num_classes_2 > 0:
             cfg.num_classes_2 = ds.num_classes_2
             log.info("  annotation2: %d classes via %r  mapping: %s",
@@ -773,7 +815,7 @@ def run_ae_pipeline(cfg: AEConfig):
             num_classes_2=cfg.num_classes_2,
         )
 
-    else:  # "contrastive"
+    else:  # "contrastive" or "supcon"
         model = ContrastiveAE(
             latent_dim=cfg.latent_dim,
             proj_dim=cfg.proj_dim,
@@ -831,7 +873,7 @@ def run_ae_pipeline(cfg: AEConfig):
             warmup_epochs=cfg.warmup_epochs,
         )
 
-    else:  # "contrastive"
+    elif cfg.model_type == "contrastive":
         model, _, _ = train_contrastive_ae(
             model, train_loader, val_loader,
             device=cfg.device,
@@ -842,6 +884,21 @@ def run_ae_pipeline(cfg: AEConfig):
             result_dir=result_dir_str,
             noise_prob=cfg.noise_prob,
             temperature=cfg.temperature,
+            use_flip=cfg.use_flip,
+        )
+
+    else:  # "supcon"
+        model, _, _ = train_supervised_contrastive_ae(
+            model, train_loader, val_loader,
+            device=cfg.device,
+            epochs=cfg.epochs,
+            lr=cfg.lr,
+            lambda_recon=cfg.lambda_recon,
+            lambda_contrast=cfg.lambda_contrast,
+            result_dir=result_dir_str,
+            noise_prob=cfg.noise_prob,
+            temperature=cfg.temperature,
+            use_flip=cfg.use_flip,
         )
 
     # ------------------------------------------------------------------

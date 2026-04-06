@@ -45,11 +45,11 @@ echo "======================================================================"
 echo " STAGE 1 — Patch preparation  (2 conditions)"
 echo "======================================================================"
 
-echo "--- [1/2] control patchprep ---"
-$PYTHON scripts/run_patchprep_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/patchprep_control.yaml
+# echo "--- [1/2] control patchprep ---"
+# $PYTHON scripts/run_patchprep_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/patchprep_control.yaml
 
-echo "--- [2/2] ycomp patchprep ---"
-$PYTHON scripts/run_patchprep_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/patchprep_ycomp.yaml
+# echo "--- [2/2] ycomp patchprep ---"
+# $PYTHON scripts/run_patchprep_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/patchprep_ycomp.yaml
 
 echo ""
 echo "======================================================================"
@@ -62,9 +62,7 @@ $PYTHON scripts/run_ae_apply_from_config.py   --root_folder "$ROOT_FOLDER" $CFG/
 echo "--- [2/4] semisup_fa AE apply ---"
 $PYTHON scripts/run_ae_apply_from_config.py   --root_folder "$ROOT_FOLDER" $CFG/ae_apply_semisup_fa.yaml
 
-echo "--- [3/4] semisup_pos AE apply ---"
-$PYTHON scripts/run_ae_apply_from_config.py   --root_folder "$ROOT_FOLDER" $CFG/ae_apply_semisup_pos.yaml
-
+# semisup_pos not available in test_run_overfit_20260322 — skipped
 echo "--- [4/4] semisup_both AE apply ---"
 $PYTHON scripts/run_ae_apply_from_config.py   --root_folder "$ROOT_FOLDER" $CFG/ae_apply_semisup_both.yaml
 
@@ -79,9 +77,7 @@ $PYTHON scripts/run_analysis_from_config.py   --root_folder "$ROOT_FOLDER" $CFG/
 echo "--- [2/4] semisup_fa analysis ---"
 $PYTHON scripts/run_analysis_from_config.py   --root_folder "$ROOT_FOLDER" $CFG/analysis_semisup_fa.yaml
 
-echo "--- [3/4] semisup_pos analysis ---"
-$PYTHON scripts/run_analysis_from_config.py   --root_folder "$ROOT_FOLDER" $CFG/analysis_semisup_pos.yaml
-
+# semisup_pos not available — skipped
 echo "--- [4/4] semisup_both analysis ---"
 $PYTHON scripts/run_analysis_from_config.py   --root_folder "$ROOT_FOLDER" $CFG/analysis_semisup_both.yaml
 
@@ -110,24 +106,13 @@ $PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/
 echo "--- semisup_fa | Position | lat8 ---"
 $PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_fa_pos_lat8.yaml
 
-echo "--- semisup_fa | FA type  | lat8+dist8 ---"
-$PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_fa_fa_lat8dist8.yaml
+# echo "--- semisup_fa | FA type  | lat8+dist8 ---"
+# $PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_fa_fa_lat8dist8.yaml
 
-echo "--- semisup_fa | Position | lat8+dist8 ---"
-$PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_fa_pos_lat8dist8.yaml
+# echo "--- semisup_fa | Position | lat8+dist8 ---"
+# $PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_fa_pos_lat8dist8.yaml
 
-# ── semisup_pos ───────────────────────────────────────────────────────────
-echo "--- semisup_pos | FA type  | lat8 ---"
-$PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_pos_fa_lat8.yaml
-
-echo "--- semisup_pos | Position | lat8 ---"
-$PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_pos_pos_lat8.yaml
-
-echo "--- semisup_pos | FA type  | lat8+dist8 ---"
-$PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_pos_fa_lat8dist8.yaml
-
-echo "--- semisup_pos | Position | lat8+dist8 ---"
-$PYTHON scripts/run_cls_apply_from_config.py  --root_folder "$ROOT_FOLDER" $CFG/cls_apply_semisup_pos_pos_lat8dist8.yaml
+# ── semisup_pos — not available in test_run_overfit_20260322, skipped ─────
 
 # ── semisup_both ──────────────────────────────────────────────────────────
 echo "--- semisup_both | FA type  | lat8 ---"
@@ -156,20 +141,56 @@ $PYTHON scripts/run_cross_classification_vis.py  --root_folder "$ROOT_FOLDER" $C
 echo "--- semisup_fa | lat8 ---"
 $PYTHON scripts/run_cross_classification_vis.py  --root_folder "$ROOT_FOLDER" $CFG/vis_semisup_fa_lat8.yaml
 
-echo "--- semisup_fa | lat8+dist8 ---"
-$PYTHON scripts/run_cross_classification_vis.py  --root_folder "$ROOT_FOLDER" $CFG/vis_semisup_fa_lat8dist8.yaml
+# echo "--- semisup_fa | lat8+dist8 ---"
+# $PYTHON scripts/run_cross_classification_vis.py  --root_folder "$ROOT_FOLDER" $CFG/vis_semisup_fa_lat8dist8.yaml
 
-echo "--- semisup_pos | lat8 ---"
-$PYTHON scripts/run_cross_classification_vis.py  --root_folder "$ROOT_FOLDER" $CFG/vis_semisup_pos_lat8.yaml
-
-echo "--- semisup_pos | lat8+dist8 ---"
-$PYTHON scripts/run_cross_classification_vis.py  --root_folder "$ROOT_FOLDER" $CFG/vis_semisup_pos_lat8dist8.yaml
-
+# semisup_pos — skipped
 echo "--- semisup_both | lat8 ---"
 $PYTHON scripts/run_cross_classification_vis.py  --root_folder "$ROOT_FOLDER" $CFG/vis_semisup_both_lat8.yaml
 
 echo "--- semisup_both | lat8+dist8 ---"
 $PYTHON scripts/run_cross_classification_vis.py  --root_folder "$ROOT_FOLDER" $CFG/vis_semisup_both_lat8dist8.yaml
+
+echo ""
+echo "======================================================================"
+echo " STAGE 6 — Whole-image overlays  (12 runs: 3 AE × 2 targets × 2 feat)"
+echo "======================================================================"
+
+echo "--- baseline | FA type  | lat8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_baseline_fa_lat8.yaml
+
+echo "--- baseline | Position | lat8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_baseline_pos_lat8.yaml
+
+echo "--- baseline | FA type  | lat8+dist8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_baseline_fa_lat8dist8.yaml
+
+echo "--- baseline | Position | lat8+dist8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_baseline_pos_lat8dist8.yaml
+
+echo "--- semisup_fa | FA type  | lat8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_semisup_fa_fa_lat8.yaml
+
+echo "--- semisup_fa | Position | lat8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_semisup_fa_pos_lat8.yaml
+
+# echo "--- semisup_fa | FA type  | lat8+dist8 ---"
+# $PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_semisup_fa_fa_lat8dist8.yaml
+
+# echo "--- semisup_fa | Position | lat8+dist8 ---"
+# $PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_semisup_fa_pos_lat8dist8.yaml
+
+echo "--- semisup_both | FA type  | lat8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_semisup_both_fa_lat8.yaml
+
+echo "--- semisup_both | Position | lat8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_semisup_both_pos_lat8.yaml
+
+echo "--- semisup_both | FA type  | lat8+dist8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_semisup_both_fa_lat8dist8.yaml
+
+echo "--- semisup_both | Position | lat8+dist8 ---"
+$PYTHON scripts/run_whole_image_overlay.py  --root_folder "$ROOT_FOLDER" $CFG/overlay_semisup_both_pos_lat8dist8.yaml
 
 echo ""
 echo "======================================================================"

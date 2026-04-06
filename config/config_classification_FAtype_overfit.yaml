@@ -1,0 +1,155 @@
+# =============================================================================
+# LightGBM classification pipeline configuration
+# Reads latents.csv from the AE pipeline and runs supervised classification.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Root folder  –  change ONLY this when switching computers.
+# All data/result paths below are rooted here.
+# ---------------------------------------------------------------------------
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+# ---------------------------------------------------------------------------
+# Input / Output
+# ---------------------------------------------------------------------------
+
+
+input:
+  latents_csv : root_folder + "/ae_results/test_run/test_run_overfit_20260322/semisup_both/latents.csv"
+
+output:
+  out_dir : root_folder + "/ae_results/test_run/test_run_overfit_20260322/semisup_both/FA_type_lat8_classification_lightgbm_from_csv"
+
+
+# ---------------------------------------------------------------------------
+# Train / val split
+# ---------------------------------------------------------------------------
+split:
+  # "from_csv"   : use the 'split' column already in latents.csv
+  #                (group-aware, consistent with AE training)
+  # "stratified" : fresh stratified random split
+  strategy    : "from_csv"
+  test_size   : 0.2      # only used for strategy: stratified
+  random_state: 42
+
+# ---------------------------------------------------------------------------
+# Classifier selection
+# ---------------------------------------------------------------------------
+classifier:
+  type : "lgbm"   # "lgbm" | "svm" | "mlp" | "knn"
+
+
+
+# ---------------------------------------------------------------------------
+# Labels
+# ---------------------------------------------------------------------------
+labels:
+  # Column to use as the classification target.
+  # If this column is already in latents.csv (e.g. annotation_label_name from
+  # the AE pipeline), no label_csv is needed.
+  label_col   : "classification"
+
+  # Optional: path to an external CSV / Excel with labels.
+  # Leave empty ("") if annotation labels are already in latents.csv.
+  # label_csv   : ""
+  label_csv : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+
+  # Column used to join external label_csv to latents.csv (both must have it).
+  filename_col: "unique_ID"
+
+  # Ordered class names – defines class 0, 1, 2, ...
+  label_order:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+
+  # Labels to drop entirely before training (null to keep all).
+  exclude_labels: null
+  # exclude_labels:
+  #   - "No adhesion"
+
+  # Kept in training but excluded from reported accuracy / F1 numbers.
+  # Use this to get 4-class accuracy without retraining a 4-class model.
+  metrics_exclude_labels:
+    - "No adhesion"
+    
+# ---------------------------------------------------------------------------
+# Features
+# ---------------------------------------------------------------------------
+features:
+  # Explicit list of feature columns.  null → auto-detect all z_* columns.
+  feature_cols: null
+
+  # Also include mean_intensity as a feature.
+  include_mean_intensity: false
+
+
+# ---------------------------------------------------------------------------
+# LightGBM  (used when classifier.type = "lgbm")
+# ---------------------------------------------------------------------------
+lightgbm:
+  n_estimators     : 500
+  learning_rate    : 0.05
+  num_leaves       : 31
+  min_child_samples: 20
+  class_weight     : "balanced"   # "balanced" or null
+
+# ---------------------------------------------------------------------------
+# SVM  (used when classifier.type = "svm")
+# ---------------------------------------------------------------------------
+svm:
+  C     : 10.0     # regularisation strength; try 1, 10, 100
+  gamma : "scale"  # "scale" | "auto"
+
+# ---------------------------------------------------------------------------
+# MLP  (used when classifier.type = "mlp")
+# ---------------------------------------------------------------------------
+mlp:
+  hidden_layers : [64, 32]   # list of layer widths
+  max_iter      : 1000
+
+# ---------------------------------------------------------------------------
+# KNN  (used when classifier.type = "knn")
+# ---------------------------------------------------------------------------
+knn:
+  n_neighbors : 10
+
+  # Stratified k-fold cross-validation (0 = skip, run train/val only)
+  n_cv_folds: 5
+
+# ---------------------------------------------------------------------------
+# Distance features (optional – latent + dist combined classification)
+# ---------------------------------------------------------------------------
+dist_features:
+  # List of patch-prep output directories (one per condition).
+  # Each dir is searched for the data_prep_record_*_to_<N>.csv with the
+  # largest N; those CSVs are concatenated and merged into the latents by
+  # filename.  Leave as null / [] to use latent features only.
+  # Output will be written to the out_dir above; name it accordingly,
+  # e.g. fa_type_classification_lat_dist.
+  patch_prep_dirs: null
+  # patch_prep_dirs:
+  #   - root_folder + "/ae_results/pax_ch_patch/plot_control"
+  #   - root_folder + "/ae_results/pax_ch_patch/plot_ycomp"
+
+  # Multiplicative weight for d* columns before classification and UMAP.
+  # Latent features stay at ×1.  Use 100 to convert normalised distances
+  # (0–1 ratio scale) into a comparable range to the latent dimensions.
+  feature_weight: 20.0
+
+# ---------------------------------------------------------------------------
+# Patch sorting
+# ---------------------------------------------------------------------------
+patch_sort:
+  # Copy labelled patches (train + val splits) into gt{x}pred{y} folders.
+  sort_labelled  : true
+  # Copy unlabelled patches (no ground-truth, "test" folder) into gtnpred{y} folders.
+  sort_unlabelled: false
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+misc:
+  log_level : "INFO"   # DEBUG | INFO | WARNING | ERROR

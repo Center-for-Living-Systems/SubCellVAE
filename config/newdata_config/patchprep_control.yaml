@@ -7,8 +7,8 @@
 
 paths:
   root_folder : "/home/lding/lding/fa_data_analysis"
-  image_folder      : "/home/lding/lding/fa_data/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/Control"
-  cell_mask_folder  : "/home/lding/lding/fa_analysis/pPax_analyis/ctrl_ch1_major/code_org_20250902_seg/mask"
+  image_folder      : "/home/lding/lding/fa_data_analysis/fa_data/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/Control"
+  cell_mask_folder  : "/home/lding/lding/fa_data_analysis/fa_cellseg/pPax_analyis/ctrl_ch1_major/code_org_20250902_seg/mask"
   patch_output_dir  : root_folder + "/ae_results/newdata_validation/patches/control/tiff_patches32"
   plot_output_dir   : root_folder + "/ae_results/newdata_validation/patches/control/plot_patches32"
 
@@ -27,11 +27,15 @@ patch:
   pad_size     : 64
   patch_prefix : ""
 
+preprocessing:
+  rolling_ball_radius : null   # set to a pixel radius (e.g. 100) to enable background subtraction
+
 normalization:
-  norm_mode     : null
-  norm_channels : null
-  norm_lo       : 1.0
-  norm_hi       : 99.0
+  norm_mode           : null        # null | "image" | "dataset" | "cell_insideoutside"
+  norm_channels       : null
+  norm_lo             : 1.0
+  norm_hi             : 99.0
+  norm_cell_scale     : 5.0         # divisor for cell_insideoutside mode
 
 segmentation:
   seg_ch               : 1

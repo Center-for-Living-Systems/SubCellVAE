@@ -13,9 +13,8 @@ output:
 embedding:
   methods:
     - UMAP
-  umap_n_neighbors  : 15
-  umap_min_dist     : 0.1
-  umap_random_state : 42
+  umap_model_pkl : root_folder + "/ae_results/test_run_overfit_20260322/baseline/fa_cls_lat8/umap_all_model.pkl"
+  # umap_n_neighbors / umap_min_dist ignored when umap_model_pkl is set
 
 clustering:
   kmeans_enabled    : true

@@ -8,7 +8,8 @@ input:
   latents_csv          : root_folder + "/ae_results/newdata_validation/semisup_both/latents_newdata.csv"
   fa_type_results_csv  : root_folder + "/ae_results/newdata_validation/semisup_both/fa_cls_lat8/predictions_all.csv"
   position_results_csv : root_folder + "/ae_results/newdata_validation/semisup_both/pos_cls_lat8/predictions_all.csv"
-  umap_model_pkl       : root_folder + "/ae_results/newdata_validation/semisup_both/fa_cls_lat8/umap_newdata_model.pkl"
+  umap_model_pkl       : root_folder + "/ae_results/test_run_overfit_20260322/semisup_both/fa_cls_lat8/umap_all_model.pkl"
+  annotation_csv       : root_folder + "/labelling/project-1-at-2025-12-01-16-46-54a904cb.csv"
 
 output:
   out_dir : root_folder + "/ae_results/newdata_validation/semisup_both/vis_lat8"

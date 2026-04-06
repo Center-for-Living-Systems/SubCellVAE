@@ -58,15 +58,23 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> AEConf
         return raw.get(section, {}).get(key, default)
 
     # ---- data ----
-    patch_dirs = _get("data", "patch_dirs", [])
-    patch_dirs = [
-        {
-            "path":           str(entry["path"]),
-            "condition":      int(entry.get("condition", entry.get("label", 0))),
-            "condition_name": str(entry.get("condition_name", "")),
-        }
-        for entry in patch_dirs
-    ]
+    raw_patch_dirs = _get("data", "patch_dirs", [])
+    patch_dirs = []
+    for entry in raw_patch_dirs:
+        if "channel_dirs" in entry:
+            # Multi-channel mode: list of per-channel directories
+            patch_dirs.append({
+                "channel_dirs":  [str(d) for d in entry["channel_dirs"]],
+                "condition":     int(entry.get("condition", 0)),
+                "condition_name": str(entry.get("condition_name", "")),
+            })
+        else:
+            # Single-channel mode (original behaviour)
+            patch_dirs.append({
+                "path":           str(entry["path"]),
+                "condition":      int(entry.get("condition", entry.get("label", 0))),
+                "condition_name": str(entry.get("condition_name", "")),
+            })
 
     # ---- output ----
     result_dir = Path(_get("output", "result_dir", "results/ae"))
@@ -105,10 +113,13 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> AEConf
     lambda_cls_2      = float(_get("model",    "lambda_cls_2",      0.0))
 
     # Contrastive-specific
-    proj_dim         = int(_get("model",   "proj_dim",         64))
-    noise_prob       = float(_get("model", "noise_prob",       0.05))
-    temperature      = float(_get("model", "temperature",      0.5))
-    lambda_contrast  = float(_get("model", "lambda_contrast",  0.5))
+    proj_dim              = int(_get("model",   "proj_dim",              64))
+    noise_prob            = float(_get("model", "noise_prob",            0.05))
+    temperature           = float(_get("model", "temperature",           0.5))
+    lambda_contrast       = float(_get("model", "lambda_contrast",       0.5))
+    use_flip              = bool(_get("model",  "use_flip",              True))
+    _isr                  = _get("model", "intensity_scale_range", [0.8, 1.2])
+    intensity_scale_range = tuple(float(v) for v in _isr)
 
     # ---- training ----
     epochs         = int(_get("training",   "epochs",         200))
@@ -150,6 +161,8 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> AEConf
         noise_prob=noise_prob,
         temperature=temperature,
         lambda_contrast=lambda_contrast,
+        use_flip=use_flip,
+        intensity_scale_range=intensity_scale_range,
         epochs=epochs,
         lr=lr,
         batch_size=batch_size,

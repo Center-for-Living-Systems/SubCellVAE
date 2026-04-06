@@ -126,6 +126,8 @@ class PipelineConfig:
     norm_channels: Optional[list] = None
     norm_lo: float = 1.0
     norm_hi: float = 99.0
+    norm_dataset_folder: Optional[str | Path] = None  # if set, compute percentile stats from this folder instead of image_folder
+    norm_cell_scale: float = 5.0                      # divisor for "cell_insideoutside" mode
 
     # --- file type ---
     file_type: str = "czi"
@@ -137,6 +139,9 @@ class PipelineConfig:
     seg_min_size_initial: int = 3
     seg_min_size_post_close: int = 10
     seg_min_size_final: int = 30000
+
+    # --- rolling-ball background subtraction ---
+    rolling_ball_radius: Optional[float] = None   # None → disabled
 
     # --- distance-to-boundary features ---
     n_dist_orientations: int = 8          # number of ray directions (produces this many columns)
@@ -157,7 +162,7 @@ class PipelineConfig:
             self.cell_mask_folder = Path(self.cell_mask_folder)
 
         # validate norm_mode
-        _valid_norm_modes = {None, "dataset", "image"}
+        _valid_norm_modes = {None, "dataset", "image", "cell_insideoutside"}
         if self.norm_mode not in _valid_norm_modes:
             raise ValueError(
                 f"norm_mode must be one of {_valid_norm_modes}, got {self.norm_mode!r}"
@@ -218,7 +223,7 @@ def _process_file(
     """
     log.info("  Processing file %d/%d: %s", filenameID, cfg.end_ind - 1, filename)
 
-    # ---- load + normalise + pad ----
+    # ---- load + (rolling ball) + normalise + pad ----
     train_img, train_seg = patch_prep.load_and_pad(
         str(cfg.image_folder),
         str(cfg.cell_mask_folder) if cfg.cell_mask_folder is not None else None,
@@ -236,6 +241,8 @@ def _process_file(
         seg_min_size_initial=cfg.seg_min_size_initial,
         seg_min_size_post_close=cfg.seg_min_size_post_close,
         seg_min_size_final=cfg.seg_min_size_final,
+        rolling_ball_radius=cfg.rolling_ball_radius,
+        norm_cell_scale=cfg.norm_cell_scale,
     )
 
     # ---- equivalent diameter from cell area (used to scale distance features) ----
@@ -426,6 +433,8 @@ def run_pipeline(cfg: PipelineConfig) -> pd.DataFrame:
              cfg.rand_trans_flag, cfg.rand_rota_flag, cfg.debug_flag)
     log.info("  norm_mode=%s  norm_lo=%.1f  norm_hi=%.1f",
              cfg.norm_mode, cfg.norm_lo, cfg.norm_hi)
+    log.info("  rolling_ball_radius=%s", cfg.rolling_ball_radius)
+    log.info("  norm_dataset_folder=%s", cfg.norm_dataset_folder or "(self)")
     log.info("  file_type=%s", cfg.file_type)
     log.info("  seg_ch=%s  seg_threshold=%.2f  seg_close_size=%d",
              cfg.seg_ch, cfg.seg_threshold, cfg.seg_close_size)
@@ -444,16 +453,28 @@ def run_pipeline(cfg: PipelineConfig) -> pd.DataFrame:
     # ---- dataset-level norm stats (computed once across ALL files in the run) ----
     norm_stats: Optional[Dict] = None
     if cfg.norm_mode == "dataset":
-        files_for_stats = filenames[cfg.start_ind:effective_end]
-        log.info(
-            "norm_mode='dataset': computing %d%%–%d%% percentile stats over "
-            "%d file(s), channels %s …",
-            int(cfg.norm_lo), int(cfg.norm_hi),
-            len(files_for_stats), cfg.norm_channels,
-        )
+        if cfg.norm_dataset_folder is not None:
+            # Use an external reference dataset (e.g. control) for percentile stats
+            norm_folder = str(cfg.norm_dataset_folder)
+            norm_files = patch_prep.list_image_files(norm_folder, file_type=cfg.file_type)
+            log.info(
+                "norm_mode='dataset': computing %d%%–%d%% percentile stats from "
+                "reference folder '%s' (%d file(s)), channels %s …",
+                int(cfg.norm_lo), int(cfg.norm_hi),
+                norm_folder, len(norm_files), cfg.norm_channels,
+            )
+        else:
+            norm_folder = str(cfg.image_folder)
+            norm_files = filenames[cfg.start_ind:effective_end]
+            log.info(
+                "norm_mode='dataset': computing %d%%–%d%% percentile stats over "
+                "%d file(s), channels %s …",
+                int(cfg.norm_lo), int(cfg.norm_hi),
+                len(norm_files), cfg.norm_channels,
+            )
         norm_stats = patch_prep.compute_dataset_norm_stats(
-            str(cfg.image_folder),
-            files_for_stats,
+            norm_folder,
+            norm_files,
             channels=cfg.norm_channels,
             lo=cfg.norm_lo,
             hi=cfg.norm_hi,

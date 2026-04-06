@@ -9,7 +9,8 @@ input:
   latents_csv          : root_folder + "/ae_results/newdata_validation/baseline/latents_newdata.csv"
   fa_type_results_csv  : root_folder + "/ae_results/newdata_validation/baseline/fa_cls_lat8dist8/predictions_all.csv"
   position_results_csv : root_folder + "/ae_results/newdata_validation/baseline/pos_cls_lat8dist8/predictions_all.csv"
-  umap_model_pkl       : null   # fit fresh UMAP on lat8 features
+  umap_model_pkl       : root_folder + "/ae_results/test_run_overfit_20260322/baseline/fa_cls_lat8/umap_all_model.pkl"
+  annotation_csv       : root_folder + "/labelling/project-1-at-2025-12-01-16-46-54a904cb.csv"
 
 output:
   out_dir : root_folder + "/ae_results/newdata_validation/baseline/vis_lat8dist8"

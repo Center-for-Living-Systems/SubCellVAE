@@ -14,9 +14,15 @@ Outputs saved to ``out_dir``:
   - ``feature_importance.png``       – LightGBM split + gain importance
   - ``prob_by_true_class.png``       – predicted max-probability by true class
   - ``classification_results.csv``   – labelled rows with predicted label + proba
-  - ``lgbm_model.pkl``               – fitted LightGBM classifier
+  - ``model.pkl``                    – fitted classifier (lgbm / svm / mlp / knn)
   - ``umap_predicted_label.png``     – UMAP of ALL patches, coloured by predicted label (tab10)
   - ``umap_true_label.png``          – UMAP of ALL patches, coloured by true label (where available)
+  - ``umap_split.png``               – train (●) + val (▲) overlaid, coloured by predicted label
+  - ``umap_split_fa4.png``           – same, top-4 classes only (excludes "No adhesion")
+  - ``umap_split_train.png``         – train patches only, all classes
+  - ``umap_split_train_fa4.png``     – train patches only, top-4 classes
+  - ``umap_split_val.png``           – val patches only, all classes
+  - ``umap_split_val_fa4.png``       – val patches only, top-4 classes
   - ``umap_all_model.pkl``           – fitted UMAP model (all patches)
   - ``patch_sort/gt{x}pred{y}/``     – patches copied by true-class / predicted-class index;
                                        unlabelled patches go into ``gtnpred{y}/``
@@ -140,7 +146,8 @@ class ClassificationConfig:
     label_csv: str        = ""
     filename_col: str     = "filename"
     label_order: list     = None
-    exclude_labels: list  = None
+    exclude_labels: list  = None         # dropped before training AND evaluation
+    metrics_exclude_labels: list = None  # kept in training, excluded from reported metrics only
 
     # --- features ---
     feature_cols: list           = None
@@ -151,6 +158,10 @@ class ClassificationConfig:
     test_size: float     = 0.2
     random_state: int    = 42
 
+    # --- classifier selection ---
+    # "lgbm" | "svm" | "mlp" | "knn"
+    classifier_type: str = "lgbm"
+
     # --- LightGBM ---
     n_estimators: int       = 500
     learning_rate: float    = 0.05
@@ -158,6 +169,17 @@ class ClassificationConfig:
     min_child_samples: int  = 20
     class_weight: str       = "balanced"   # "balanced" or null/""
     n_cv_folds: int         = 0            # 0 = no CV
+
+    # --- SVM (used when classifier_type = "svm") ---
+    svm_C: float     = 10.0    # regularisation; larger = tighter fit
+    svm_gamma: str   = "scale" # "scale" | "auto" | float
+
+    # --- MLP (used when classifier_type = "mlp") ---
+    mlp_hidden_layers: list = None   # e.g. [64, 32]; None → [64, 32] default
+    mlp_max_iter: int       = 1000
+
+    # --- KNN (used when classifier_type = "knn") ---
+    knn_n_neighbors: int = 10
 
     # --- distance features ---
     # List of patch-prep plot/csv directories (one per condition).
@@ -212,20 +234,69 @@ def _build_lgbm(cfg: ClassificationConfig, n_classes: int):
     )
 
 
+def _build_classifier(cfg: ClassificationConfig, n_classes: int):
+    """Instantiate a classifier from config based on classifier_type."""
+    ctype = cfg.classifier_type.lower()
+
+    if ctype == "lgbm":
+        return _build_lgbm(cfg, n_classes)
+
+    if ctype == "svm":
+        from sklearn.svm import SVC
+        cw = cfg.class_weight if cfg.class_weight else None
+        return SVC(
+            kernel="rbf",
+            C=cfg.svm_C,
+            gamma=cfg.svm_gamma,
+            class_weight=cw,
+            probability=True,   # needed for predict_proba
+            random_state=cfg.random_state,
+        )
+
+    if ctype == "mlp":
+        from sklearn.neural_network import MLPClassifier
+        hidden = tuple(cfg.mlp_hidden_layers) if cfg.mlp_hidden_layers else (64, 32)
+        return MLPClassifier(
+            hidden_layer_sizes=hidden,
+            max_iter=cfg.mlp_max_iter,
+            random_state=cfg.random_state,
+            early_stopping=True,
+            validation_fraction=0.1,
+        )
+
+    if ctype == "knn":
+        from sklearn.neighbors import KNeighborsClassifier
+        return KNeighborsClassifier(
+            n_neighbors=cfg.knn_n_neighbors,
+            weights="distance",
+            metric="euclidean",
+            n_jobs=-1,
+        )
+
+    raise ValueError(f"Unknown classifier_type: {cfg.classifier_type!r}. "
+                     "Choose from: lgbm, svm, mlp, knn")
+
+
 def _evaluate(clf, X, y, class_names) -> dict:
     y_pred  = clf.predict(X)
     y_proba = clf.predict_proba(X)
+    # Restrict all metrics to the expected class indices (len of class_names).
+    # When the classifier was trained on more classes than class_names covers
+    # (e.g. metrics_exclude_labels filtered some classes from y but not y_pred),
+    # labels= ensures spurious predictions don't break the report.
+    labels = list(range(len(class_names)))
     return {
         "y_pred":             y_pred,
         "y_proba":            y_proba,
         "accuracy":           accuracy_score(y, y_pred),
-        "balanced_accuracy":  balanced_accuracy_score(y, y_pred),
-        "f1_macro":           f1_score(y, y_pred, average="macro",    zero_division=0),
-        "f1_weighted":        f1_score(y, y_pred, average="weighted", zero_division=0),
+        "balanced_accuracy":  balanced_accuracy_score(y, y_pred, adjusted=False),
+        "f1_macro":           f1_score(y, y_pred, average="macro",    labels=labels, zero_division=0),
+        "f1_weighted":        f1_score(y, y_pred, average="weighted", labels=labels, zero_division=0),
         "report":             classification_report(y, y_pred,
+                                                    labels=labels,
                                                     target_names=class_names,
                                                     zero_division=0),
-        "confusion_matrix":   confusion_matrix(y, y_pred),
+        "confusion_matrix":   confusion_matrix(y, y_pred, labels=labels),
     }
 
 
@@ -364,6 +435,62 @@ def _plot_umap_predicted(
     if ylim is not None:
         ax.set_ylim(ylim)
     ax.legend(markerscale=3, fontsize=8, loc="best")
+    ax.set_title(title)
+    ax.set_xlabel("UMAP 1")
+    ax.set_ylabel("UMAP 2")
+    fig.tight_layout()
+    fig.savefig(str(save_path), dpi=150)
+    plt.close(fig)
+
+
+def _plot_umap_split(
+    emb: np.ndarray,
+    split_labels: np.ndarray,
+    pred_names: np.ndarray,
+    label_order: list,
+    title: str,
+    save_path: Path,
+    xlim: tuple | None = None,
+    ylim: tuple | None = None,
+):
+    """UMAP coloured by train/val split, with FA-type shown by marker shape.
+
+    train patches → circles (o)
+    val   patches → triangles (^)
+
+    This diagnostic reveals whether the class cluster structure seen for
+    training patches also holds for held-out validation patches.
+    """
+    palette = plt.get_cmap("tab10")
+    split_arr = np.array(split_labels)
+    pred_arr  = np.array(pred_names)
+
+    split_styles = {
+        "train": ("o", 0.5, 4,  "train"),
+        "val":   ("^", 0.9, 12, "val"),
+    }
+
+    fig, ax = plt.subplots(figsize=(8, 7))
+    for i, lbl in enumerate(label_order):
+        color = palette(i / max(len(label_order) - 1, 1))
+        for sp, (marker, alpha, size, sp_label) in split_styles.items():
+            mask = (pred_arr == lbl) & (split_arr == sp)
+            if not mask.any():
+                continue
+            legend_label = f"{lbl} [{sp_label}]" if sp == "val" else lbl
+            ax.scatter(
+                emb[mask, 0], emb[mask, 1],
+                label=legend_label,
+                s=size, alpha=alpha, color=color,
+                marker=marker,
+                linewidths=0,
+            )
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    ax.legend(markerscale=2, fontsize=7, loc="best", ncol=2)
     ax.set_title(title)
     ax.set_xlabel("UMAP 1")
     ax.set_ylabel("UMAP 2")
@@ -690,7 +817,7 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
                               random_state=cfg.random_state)
         fold_acc, fold_bacc, fold_f1 = [], [], []
         for fold, (tr, va) in enumerate(skf.split(X, y), 1):
-            clf_cv = _build_lgbm(cfg, n_classes)
+            clf_cv = _build_classifier(cfg, n_classes)
             clf_cv.fit(X[tr], y[tr])
             ev = _evaluate(clf_cv, X[va], y[va], label_order)
             fold_acc.append(ev["accuracy"])
@@ -716,10 +843,10 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
     # ------------------------------------------------------------------
     # 5. Train final model on train split
     # ------------------------------------------------------------------
-    log.info("Step 5: Training final LightGBM model …")
-    clf = _build_lgbm(cfg, n_classes)
+    log.info("Step 5: Training final %s model …", cfg.classifier_type.upper())
+    clf = _build_classifier(cfg, n_classes)
     clf.fit(X_train, y_train)
-    joblib.dump(clf, str(cfg.out_dir / "lgbm_model.pkl"))
+    joblib.dump(clf, str(cfg.out_dir / "model.pkl"))
     log.info("  Model saved → %s", cfg.out_dir / "lgbm_model.pkl")
 
     # ------------------------------------------------------------------
@@ -733,6 +860,26 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
     log.info("  F1 weighted       : %.4f", metrics["f1_weighted"])
     log.info("\n%s", metrics["report"])
 
+    # Optional: metrics excluding certain labels from the reported numbers.
+    # Those labels were still in training; only the evaluation rows are filtered.
+    metrics_excl = None
+    excl_labels    = cfg.metrics_exclude_labels or []
+    excl_ids       = {label_to_id[l] for l in excl_labels if l in label_to_id}
+    filtered_order = [l for l in label_order if l not in excl_labels]
+    if excl_ids and filtered_order:
+        keep = ~np.isin(y_val, list(excl_ids))
+        if keep.any():
+            # Remap class ids so they are 0-based for the filtered label list
+            kept_ids   = sorted(label_to_id[l] for l in filtered_order)
+            id_remap   = {old: new for new, old in enumerate(kept_ids)}
+            y_val_filt = np.array([id_remap[v] for v in y_val[keep]])
+            metrics_excl = _evaluate(clf, X_val[keep], y_val_filt, filtered_order)
+            log.info("  [excl %s] Accuracy : %.4f  Balanced acc : %.4f  F1 macro : %.4f",
+                     excl_labels,
+                     metrics_excl["accuracy"],
+                     metrics_excl["balanced_accuracy"],
+                     metrics_excl["f1_macro"])
+
     # Save metrics text
     summary_lines = [
         f"accuracy          : {metrics['accuracy']:.4f}",
@@ -740,6 +887,14 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
         f"f1_macro          : {metrics['f1_macro']:.4f}",
         f"f1_weighted       : {metrics['f1_weighted']:.4f}",
     ]
+    if metrics_excl is not None:
+        summary_lines += [
+            "",
+            f"# --- metrics excluding {excl_labels} (kept in training) ---",
+            f"accuracy_excl     : {metrics_excl['accuracy']:.4f}",
+            f"balanced_acc_excl : {metrics_excl['balanced_accuracy']:.4f}",
+            f"f1_macro_excl     : {metrics_excl['f1_macro']:.4f}",
+        ]
     if cv_results:
         summary_lines += [
             "",
@@ -748,6 +903,12 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
             f"cv_f1_macro       : {cv_results['cv_f1_macro_mean']:.4f} ± {cv_results['cv_f1_macro_std']:.4f}",
         ]
     summary_lines += ["", "Classification report (validation):", metrics["report"]]
+    if metrics_excl is not None:
+        summary_lines += [
+            "",
+            f"Classification report (validation, excl. {excl_labels}):",
+            metrics_excl["report"],
+        ]
     (cfg.out_dir / "metrics.txt").write_text("\n".join(summary_lines))
 
     # Save per-class metrics CSV
@@ -804,9 +965,10 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
     )
     log.info("  Train acc=%.4f  |  Val acc=%.4f", train_acc, acc)
 
-    # Feature importance
-    _plot_feature_importance(clf, feat_cols,
-                             cfg.out_dir / "feature_importance.png")
+    # Feature importance (LightGBM only)
+    if cfg.classifier_type.lower() == "lgbm":
+        _plot_feature_importance(clf, feat_cols,
+                                 cfg.out_dir / "feature_importance.png")
 
     # Per-class F1 bar chart
     _plot_per_class_f1(report_dict, label_order,
@@ -980,6 +1142,50 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
                     label_to_color=color_map,
                     xlim=xlim, ylim=ylim,
                 )
+
+        # ── train vs val split coloured by predicted label ────────────────
+        if "split" in df_all.columns:
+            split_vals = df_all["split"].fillna("unlabelled").values
+            train_mask = split_vals == "train"
+            val_mask   = split_vals == "val"
+
+            # combined overlay (train=circle, val=triangle)
+            _plot_umap_split(
+                emb_all,
+                split_labels=split_vals,
+                pred_names=pred_arr_all,
+                label_order=label_order,
+                title=f"UMAP – train (●) vs val (▲), predicted {_task_name}",
+                save_path=cfg.out_dir / "umap_split.png",
+                xlim=xlim, ylim=ylim,
+            )
+            # combined overlay, top-4 classes only
+            _plot_umap_split(
+                emb_all[fa4_mask],
+                split_labels=split_vals[fa4_mask],
+                pred_names=pred_arr_all[fa4_mask],
+                label_order=fa4_order,
+                title=f"UMAP – train (●) vs val (▲), predicted {_task_name} (top-4)",
+                save_path=cfg.out_dir / "umap_split_fa4.png",
+                xlim=xlim, ylim=ylim,
+            )
+            # train patches only, all classes
+            _umap_subset(train_mask, all_classes,
+                         f"UMAP – train only, predicted {_task_name}",
+                         cfg.out_dir / "umap_split_train.png")
+            # train patches only, top-4 classes
+            _umap_subset(train_mask, fa4_mask,
+                         f"UMAP – train only, predicted {_task_name} (top-4)",
+                         cfg.out_dir / "umap_split_train_fa4.png")
+            # val patches only, all classes
+            _umap_subset(val_mask, all_classes,
+                         f"UMAP – val only, predicted {_task_name}",
+                         cfg.out_dir / "umap_split_val.png")
+            # val patches only, top-4 classes
+            _umap_subset(val_mask, fa4_mask,
+                         f"UMAP – val only, predicted {_task_name} (top-4)",
+                         cfg.out_dir / "umap_split_val_fa4.png")
+            log.info("  Saved umap_split*.png — compare train vs val to check cluster generalization")
 
         log.info("  UMAP plots saved (n=%d patches)", len(df_all))
 

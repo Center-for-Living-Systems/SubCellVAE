@@ -44,9 +44,14 @@ labels:
     - "No adhesion"
 
   # Labels to drop entirely before training (null to keep all).
-  exclude_labels: null
+  exclude_labels: null           # drop before training AND evaluation
   # exclude_labels:
   #   - "No adhesion"
+
+  # Kept in training but excluded from reported accuracy / F1 numbers.
+  # Use this to get 4-class accuracy without retraining a 4-class model.
+  metrics_exclude_labels:
+    - "No adhesion"
 
 # ---------------------------------------------------------------------------
 # Features
@@ -65,12 +70,18 @@ split:
   # "from_csv"   : use the 'split' column already in latents.csv
   #                (group-aware, consistent with AE training)
   # "stratified" : fresh stratified random split
-  strategy    : "stratified"
+  strategy    : "from_csv"
   test_size   : 0.2      # only used for strategy: stratified
   random_state: 42
 
 # ---------------------------------------------------------------------------
-# LightGBM
+# Classifier selection
+# ---------------------------------------------------------------------------
+classifier:
+  type : "svm"   # "lgbm" | "svm" | "mlp" | "knn"
+
+# ---------------------------------------------------------------------------
+# LightGBM  (used when classifier.type = "lgbm")
 # ---------------------------------------------------------------------------
 lightgbm:
   n_estimators     : 500
@@ -78,6 +89,26 @@ lightgbm:
   num_leaves       : 31
   min_child_samples: 20
   class_weight     : "balanced"   # "balanced" or null
+
+# ---------------------------------------------------------------------------
+# SVM  (used when classifier.type = "svm")
+# ---------------------------------------------------------------------------
+svm:
+  C     : 10.0     # regularisation strength; try 1, 10, 100
+  gamma : "scale"  # "scale" | "auto"
+
+# ---------------------------------------------------------------------------
+# MLP  (used when classifier.type = "mlp")
+# ---------------------------------------------------------------------------
+mlp:
+  hidden_layers : [64, 32]   # list of layer widths
+  max_iter      : 1000
+
+# ---------------------------------------------------------------------------
+# KNN  (used when classifier.type = "knn")
+# ---------------------------------------------------------------------------
+knn:
+  n_neighbors : 10
 
   # Stratified k-fold cross-validation (0 = skip, run train/val only)
   n_cv_folds: 5

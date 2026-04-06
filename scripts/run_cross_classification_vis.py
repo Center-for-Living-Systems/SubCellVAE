@@ -87,6 +87,11 @@ class CrossVisConfig:
     position_order       : list = field(default_factory=lambda: list(position_label_order))
     random_state         : int  = 42
     log_level            : str  = "INFO"
+    # Optional external annotation CSV (for newdata without embedded true labels)
+    annotation_csv       : Path | None = None
+    annotation_key_col   : str  = "crop_img_filename"  # join key in annotation CSV
+    annotation_fa_col    : str  = "classification"
+    annotation_pos_col   : str  = "Position"
 
 
 def load_config(yaml_path: str | Path, root_folder: str | None = None) -> CrossVisConfig:
@@ -101,6 +106,7 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> CrossV
         return raw.get(section, {}).get(key, default)
 
     umap_pkl = _get("input", "umap_model_pkl", None)
+    ann_csv  = _get("input", "annotation_csv", None)
     return CrossVisConfig(
         latents_csv          = Path(str(_get("input",  "latents_csv",          ""))),
         fa_type_results_csv  = Path(str(_get("input",  "fa_type_results_csv",  ""))),
@@ -115,6 +121,10 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> CrossV
                                     list(position_label_order)),
         random_state         = int(_get("misc", "random_state", 42)),
         log_level            = str(_get("misc", "log_level", "INFO")),
+        annotation_csv       = Path(str(ann_csv)) if ann_csv else None,
+        annotation_key_col   = str(_get("input", "annotation_key_col", "crop_img_filename")),
+        annotation_fa_col    = str(_get("input", "annotation_fa_col",  "classification")),
+        annotation_pos_col   = str(_get("input", "annotation_pos_col", "Position")),
     )
 
 
@@ -295,11 +305,32 @@ def run_cross_vis(cfg: CrossVisConfig) -> None:
     # ------------------------------------------------------------------
     log.info("Step 1: Loading classifier predictions …")
 
+    import re as _re
+    _PATCH_RE = _re.compile(r'(f\d+x\d+y\d+ps\d+\.tif)$', _re.IGNORECASE)
+
     def _norm_key(s: str) -> str:
-        return Path(str(s)).name
+        """Return the canonical patch filename (f\d+x\d+y\d+ps\d+.tif), stripping
+        any path prefix or condition prefix (e.g. ctrl_ch1_, ycomp_ch1_)."""
+        name = Path(str(s)).name
+        m = _PATCH_RE.search(name)
+        return m.group(1) if m else name
+
+    # ── optional external annotation CSV (newdata with separate label file) ──
+    ann_fa_map = ann_pos_map = None
+    if cfg.annotation_csv and cfg.annotation_csv.exists():
+        log.info("  Loading annotation CSV: %s", cfg.annotation_csv)
+        df_ann = pd.read_csv(cfg.annotation_csv)
+        df_ann["_ann_key"] = df_ann[cfg.annotation_key_col].apply(_norm_key)
+        ann_fa_map  = df_ann.set_index("_ann_key")[cfg.annotation_fa_col].to_dict()
+        ann_pos_map = df_ann.set_index("_ann_key")[cfg.annotation_pos_col].to_dict()
+        log.info("  Annotation entries: %d  (key sample: %s)",
+                 len(df_ann), df_ann["_ann_key"].iloc[0] if len(df_ann) else "–")
 
     df_fa = pd.read_csv(cfg.fa_type_results_csv)
     df_fa["_key"] = df_fa["filename"].apply(_norm_key)
+    # Inject true labels from external annotation CSV if available
+    if ann_fa_map is not None and cfg.fa_type_label_col not in df_fa.columns:
+        df_fa[cfg.fa_type_label_col] = df_fa["_key"].map(ann_fa_map)
     fa_rename = {"pred_label": "pred_fa_type"}
     if cfg.fa_type_label_col in df_fa.columns:
         fa_rename[cfg.fa_type_label_col] = "true_fa_type"
@@ -309,10 +340,13 @@ def run_cross_vis(cfg: CrossVisConfig) -> None:
               (["true_fa_type"] if "true_fa_type" in df_fa.columns else [])
     df_fa = df_fa[[c for c in fa_keep if c in df_fa.columns]]
     df_fa = df_fa.rename(columns={"max_prob": "max_prob_fa_type"})
-    log.info("  FA-type:  %d rows", len(df_fa))
+    log.info("  FA-type:  %d rows  (true labels: %d)",
+             len(df_fa), df_fa["true_fa_type"].notna().sum() if "true_fa_type" in df_fa.columns else 0)
 
     df_pos = pd.read_csv(cfg.position_results_csv)
     df_pos["_key"] = df_pos["filename"].apply(_norm_key)
+    if ann_pos_map is not None and cfg.position_label_col not in df_pos.columns:
+        df_pos[cfg.position_label_col] = df_pos["_key"].map(ann_pos_map)
     pos_rename = {"pred_label": "pred_position"}
     if cfg.position_label_col in df_pos.columns:
         pos_rename[cfg.position_label_col] = "true_position"
@@ -321,7 +355,8 @@ def run_cross_vis(cfg: CrossVisConfig) -> None:
                (["true_position"] if "true_position" in df_pos.columns else [])
     df_pos = df_pos[[c for c in pos_keep if c in df_pos.columns]]
     df_pos = df_pos.rename(columns={"max_prob": "max_prob_position"})
-    log.info("  Position: %d rows", len(df_pos))
+    log.info("  Position: %d rows  (true labels: %d)",
+             len(df_pos), df_pos["true_position"].notna().sum() if "true_position" in df_pos.columns else 0)
 
     df = df_fa.merge(df_pos, on="_key", how="inner")
     log.info("  Merged:   %d rows (inner join on filename)", len(df))
@@ -515,6 +550,52 @@ def run_cross_vis(cfg: CrossVisConfig) -> None:
             cfg.out_dir / f"crosstab_pred_norm_col_{subset_name}.png",
             normalize="columns",
         )
+
+        # ── per-classifier confusion matrices (labelled patches only) ────────
+        def _acc(sub_df, true_col, pred_col, valid_labels):
+            """Accuracy on rows where true label is in valid_labels."""
+            m = sub_df[true_col].isin(valid_labels) & sub_df[pred_col].notna()
+            if not m.any():
+                return None
+            return (sub_df.loc[m, true_col] == sub_df.loc[m, pred_col]).mean()
+
+        if has_true_fa:
+            fa_lbl = sub[sub["true_fa_type"].notna()]
+            if not fa_lbl.empty:
+                acc = _acc(fa_lbl, "true_fa_type", "pred_fa_type", cfg.fa_type_order)
+                acc_str = f"  acc={acc:.1%}" if acc is not None else ""
+                _plot_crosstab(
+                    fa_lbl, "true_fa_type", "pred_fa_type",
+                    cfg.fa_type_order, cfg.fa_type_order,
+                    f"FA-type: true vs predicted – {subset_name}{acc_str}",
+                    cfg.out_dir / f"confusion_fa_type_{subset_name}.png",
+                )
+                _plot_crosstab(
+                    fa_lbl, "true_fa_type", "pred_fa_type",
+                    cfg.fa_type_order, cfg.fa_type_order,
+                    f"FA-type: true vs predicted – {subset_name} (row-norm){acc_str}",
+                    cfg.out_dir / f"confusion_fa_type_norm_{subset_name}.png",
+                    normalize="index",
+                )
+
+        if has_true_pos:
+            pos_lbl = sub[sub["true_position"].notna()]
+            if not pos_lbl.empty:
+                acc = _acc(pos_lbl, "true_position", "pred_position", cfg.position_order)
+                acc_str = f"  acc={acc:.1%}" if acc is not None else ""
+                _plot_crosstab(
+                    pos_lbl, "true_position", "pred_position",
+                    cfg.position_order, cfg.position_order,
+                    f"Position: true vs predicted – {subset_name}{acc_str}",
+                    cfg.out_dir / f"confusion_position_{subset_name}.png",
+                )
+                _plot_crosstab(
+                    pos_lbl, "true_position", "pred_position",
+                    cfg.position_order, cfg.position_order,
+                    f"Position: true vs predicted – {subset_name} (row-norm){acc_str}",
+                    cfg.out_dir / f"confusion_position_norm_{subset_name}.png",
+                    normalize="index",
+                )
 
         # ── true × true and mixed (labelled patches only) ─────────────────
         if has_true_fa and has_true_pos:

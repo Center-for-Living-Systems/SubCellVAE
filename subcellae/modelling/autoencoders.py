@@ -9,6 +9,15 @@ Four autoencoder variants:
 
 All models share the same encoder/decoder backbone dimensions and expect
 square input patches (default 32×32).
+
+Multi-channel support
+---------------------
+All models natively support multi-channel inputs — no separate class is needed.
+Pass ``no_ch=C`` (AE / SemiSupAE / ContrastiveAE) or ``in_channels=C`` (VAE32)
+where C is the number of input channels (e.g. 4 for a 4-channel image).
+The first conv layer and last transposed-conv layer automatically adapt.
+Use :class:`~subcellae.modelling.dataset.MultiChannelPatchDataset` to load
+stacked ``(C, H, W)`` tensors from per-channel patch directories.
 """
 
 import os
@@ -52,6 +61,58 @@ def salt_and_pepper_noise(x: torch.Tensor, noise_prob: float = 0.05) -> torch.Te
     return noisy
 
 
+def intensity_scale(x: torch.Tensor, scale_range: tuple = (0.8, 1.2)) -> torch.Tensor:
+    """
+    Randomly scale the intensity of each image in a batch by an independent
+    factor drawn uniformly from ``scale_range``, then clamp to [0, 1].
+
+    Parameters
+    ----------
+    x           : (B, C, H, W) tensor, values in [0, 1]
+    scale_range : (low, high) multiplicative range; default (0.8, 1.2)
+    """
+    lo, hi = scale_range
+    # One scale factor per image, broadcast over C, H, W
+    scale = torch.empty(x.size(0), 1, 1, 1, device=x.device).uniform_(lo, hi)
+    return (x * scale).clamp(0.0, 1.0)
+
+
+def augment_contrastive_view(
+    x: torch.Tensor,
+    noise_prob: float = 0.05,
+    use_flip: bool    = True,
+) -> torch.Tensor:
+    """
+    Create an augmented view for contrastive learning.
+
+    Augmentations applied (in order):
+      1. Random horizontal flip   (50 % probability per image) — if use_flip
+      2. Random vertical flip     (50 % probability per image) — if use_flip
+      3. Salt-and-pepper noise    (random pixel corruption)
+
+    Parameters
+    ----------
+    x          : (B, C, H, W) clean patches, values in [0, 1]
+    noise_prob : fraction of pixels corrupted by salt/pepper noise
+    use_flip   : whether to apply random H/V flips (default True)
+    """
+    out = x.clone()
+
+    if use_flip:
+        # Random horizontal flip (W dimension = -1)
+        flip_h = torch.rand(x.size(0), device=x.device) > 0.5
+        if flip_h.any():
+            out[flip_h] = out[flip_h].flip(-1)
+
+        # Random vertical flip (H dimension = -2)
+        flip_v = torch.rand(x.size(0), device=x.device) > 0.5
+        if flip_v.any():
+            out[flip_v] = out[flip_v].flip(-2)
+
+    out = salt_and_pepper_noise(out, noise_prob=noise_prob)
+    return out
+
+
 def plot_reconstruction_progress(model, dataloader, device, epoch, vae_mode=False):
     """Show original vs. reconstructed patches for one batch."""
     model.eval()
@@ -68,12 +129,16 @@ def plot_reconstruction_progress(model, dataloader, device, epoch, vae_mode=Fals
     print(f"[epoch {epoch}] input  — min {x.min():.3f}  max {x.max():.3f}  mean {x.mean():.3f}")
     print(f"[epoch {epoch}] recon  — min {recon.min():.3f}  max {recon.max():.3f}  mean {recon.mean():.3f}")
 
+    def _to_display(t):
+        """Return a 2-D (H, W) array for imshow; picks channel 0 if multi-channel."""
+        return t[0] if t.shape[0] > 1 else t.squeeze()
+
     n = min(8, x.size(0))
     fig, axes = plt.subplots(2, n, figsize=(n, 2))
     for i in range(n):
-        axes[0, i].imshow(x[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+        axes[0, i].imshow(_to_display(x[i]), cmap="gray", vmin=0, vmax=1)
         axes[0, i].axis("off")
-        axes[1, i].imshow(recon[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+        axes[1, i].imshow(_to_display(recon[i]), cmap="gray", vmin=0, vmax=1)
         axes[1, i].axis("off")
     plt.suptitle(f"Reconstruction @ epoch {epoch}")
     plt.tight_layout()
@@ -649,8 +714,11 @@ def train_semisup_ae(
         Number of epochs to train with reconstruction loss only (classification
         weights forced to 0).  After warmup, the configured ``lambda_cls`` /
         ``lambda_cls2`` values are restored.  Default 200.
-    A ``ReduceLROnPlateau`` scheduler (factor 0.5, patience 10) is always
-    active; the learning rate is halved whenever val loss plateaus.
+    A ``ReduceLROnPlateau`` scheduler (factor 0.5, patience 10) is active
+    during phase 2 only.  It is skipped during warmup to prevent the
+    reconstruction plateau from draining the LR before classification starts.
+    At the warmup→phase-2 transition the LR is reset to its original value
+    and the scheduler is restarted fresh.
     """
     dual_mode = lambda_cls2 > 0 and getattr(model, "classifier2", None) is not None
 
@@ -759,8 +827,19 @@ def train_semisup_ae(
         if total_labelled2 > 0:
             acc_str += f"  val_acc2={100.*correct2/total_labelled2:.1f}%"
 
-        # LR scheduler step (monitors val total loss)
-        scheduler.step(vl)
+        # LR scheduler: skip during warmup so recon plateau doesn't drain the LR.
+        # At the warmup→phase-2 transition, reset LR to the original value so the
+        # classifier head can actually learn.
+        if not in_warmup:
+            scheduler.step(vl)
+        elif epoch + 1 == warmup_epochs:
+            # First epoch of phase 2: reset LR and scheduler state
+            for pg in optimizer.param_groups:
+                pg["lr"] = lr
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-6,
+            )
+            print(f"SemiSup  warmup complete — LR reset to {lr:.2e}, scheduler restarted")
         current_lr = optimizer.param_groups[0]["lr"]
 
         # Best-checkpoint tracking (only after min_epochs_for_best) and early stopping
@@ -964,6 +1043,68 @@ def nt_xent_loss(z1: torch.Tensor, z2: torch.Tensor, temperature: float = 0.5) -
     return loss
 
 
+def supcon_loss(
+    z: torch.Tensor,
+    labels: torch.Tensor,
+    temperature: float = 0.5,
+) -> torch.Tensor:
+    """
+    Hybrid Supervised Contrastive loss (SupCon-style).
+
+    Expects a 2N-sized batch formed by stacking the clean and augmented views:
+        z      = cat([z_clean, z_aug], dim=0)   shape (2N, D)
+        labels = cat([orig_labels, orig_labels]) shape (2N,)
+
+    For **labeled** anchors (label >= 0):
+        positives = all other samples in the batch sharing the same label
+        (this automatically includes the paired augmented view).
+    For **unlabeled** anchors (label == -1):
+        positives = only the paired augmented view (equivalent to NT-Xent).
+
+    Parameters
+    ----------
+    z      : (2N, D) projection vectors (will be L2-normalised internally)
+    labels : (2N,) integer class IDs; -1 marks unlabeled
+    """
+    N2 = z.size(0)      # = 2 * batch_size
+    B  = N2 // 2
+    z  = F.normalize(z, dim=1)
+
+    sim = torch.matmul(z, z.T) / temperature    # (2N, 2N)
+
+    # Mask self-similarities so they are excluded from the denominator
+    self_mask = torch.eye(N2, dtype=torch.bool, device=z.device)
+    sim_no_self = sim.masked_fill(self_mask, float("-inf"))
+
+    # --- Build positive mask ---
+    # Self-supervised fallback: (i, i+B) and (i+B, i) for each sample
+    ss_mask = torch.zeros(N2, N2, dtype=torch.bool, device=z.device)
+    idx = torch.arange(B, device=z.device)
+    ss_mask[idx, idx + B] = True
+    ss_mask[idx + B, idx] = True
+
+    # Supervised: same class, both labeled, not self
+    lab = labels.unsqueeze(1)                              # (2N, 1)
+    both_labeled = (labels >= 0).unsqueeze(1) & (labels >= 0).unsqueeze(0)
+    sup_mask = (lab == lab.T) & ~self_mask & both_labeled  # (2N, 2N)
+
+    # Select: labeled anchors use sup_mask, unlabeled use ss_mask
+    labeled_anchor = (labels >= 0).unsqueeze(1).expand(N2, N2)
+    pos_mask = torch.where(labeled_anchor, sup_mask, ss_mask)
+
+    has_pos = pos_mask.any(dim=1)
+    if not has_pos.any():
+        return z.sum() * 0.0   # safe zero that keeps the computation graph
+
+    # SupCon loss:  L_i = -1/|P_i| * sum_{p in P_i}(sim_ip) + log_denom_i
+    log_denom   = torch.logsumexp(sim_no_self, dim=1)               # (2N,)
+    n_pos       = pos_mask.float().sum(dim=1).clamp(min=1)          # (2N,)
+    pos_sim_sum = (sim * pos_mask.float()).sum(dim=1)                # (2N,)
+    loss_per    = -pos_sim_sum / n_pos + log_denom                   # (2N,)
+
+    return loss_per[has_pos].mean()
+
+
 def contrastive_ae_loss(
     x: torch.Tensor,
     recon: torch.Tensor,
@@ -996,15 +1137,25 @@ def train_contrastive_ae(
     lambda_recon,
     lambda_contrast,
     result_dir,
-    noise_prob: float  = 0.05,
-    temperature: float = 0.5,
+    noise_prob: float            = 0.05,
+    temperature: float           = 0.5,
+    use_flip: bool               = True,
+    intensity_scale_range: tuple = (0.8, 1.2),   # kept for API compat, no longer used
 ):
     """
-    Training loop for ContrastiveAE.
+    Training loop for ContrastiveAE (self-supervised NT-Xent).
 
-    For each batch the function creates a noisy view on-the-fly using
-    salt-and-pepper noise.  The contrastive loss encourages the encoder
-    to produce noise-invariant embeddings.
+    For each batch two views are created on-the-fly:
+      - View 1 (clean)     : the original patch
+      - View 2 (augmented) : randomly flipped then salt-and-pepper corrupted
+
+    The contrastive loss (NT-Xent) encourages the encoder to produce
+    embeddings invariant to geometric flips and pixel-level noise.
+
+    Parameters
+    ----------
+    noise_prob            : fraction of pixels corrupted by salt-and-pepper noise
+    intensity_scale_range : deprecated, kept for backward-compatibility, ignored
     """
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
@@ -1023,7 +1174,7 @@ def train_contrastive_ae(
             x = batch[0].to(device)
 
             # --- two views ---
-            x_noisy = salt_and_pepper_noise(x, noise_prob=noise_prob)
+            x_noisy = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
 
             z_clean = model.encode(x)
             z_noisy = model.encode(x_noisy)
@@ -1050,7 +1201,7 @@ def train_contrastive_ae(
         with torch.no_grad():
             for batch in val_loader:
                 x = batch[0].to(device)
-                x_noisy = salt_and_pepper_noise(x, noise_prob=noise_prob)
+                x_noisy = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
 
                 z_clean = model.encode(x)
                 z_noisy = model.encode(x_noisy)
@@ -1088,7 +1239,7 @@ def train_contrastive_ae(
             with torch.no_grad():
                 for batch in val_loader:
                     x = batch[0].to(device)
-                    x_noisy = salt_and_pepper_noise(x, noise_prob=noise_prob)
+                    x_noisy = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
                     recon, _ = model(x)
                     x = x.cpu(); x_noisy = x_noisy.cpu(); recon = recon.cpu()
                     break
@@ -1120,6 +1271,156 @@ def train_contrastive_ae(
 
     _save_loss_curves(train_losses, val_losses, epochs,
                       "Contrastive AE Total Loss", result_dir, "contrastive")
+    return model, train_losses, val_losses
+
+
+def train_supervised_contrastive_ae(
+    model,
+    train_loader,   # yields (x, condition, annotation_label, path)
+    val_loader,
+    device,
+    epochs,
+    lr,
+    lambda_recon,
+    lambda_contrast,
+    result_dir,
+    noise_prob: float  = 0.05,
+    temperature: float = 0.5,
+    use_flip: bool     = True,
+):
+    """
+    Training loop for ContrastiveAE with Supervised Contrastive loss (SupCon).
+
+    Two views per image are created on-the-fly (random flips + salt-and-pepper
+    noise).  For each mini-batch the 2N-sized projection set is built by
+    concatenating both views.  The SupCon loss pulls together:
+      - same-class patches from different images (when labels are available)
+      - each image with its own augmented view (fallback for unlabeled patches)
+
+    Reconstruction loss is computed on the clean view only.
+
+    Parameters
+    ----------
+    noise_prob   : salt-and-pepper corruption probability for the augmented view
+    temperature  : softmax temperature for the SupCon loss
+    """
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    train_losses, val_losses    = [], []
+    train_recon, train_contrast = [], []
+    val_recon,   val_contrast   = [], []
+
+    error_print_period = max(1, epochs // 50)
+    recon_view_period  = max(1, epochs // 10)
+
+    for epoch in range(epochs):
+        model.train()
+        tl = tr = tc = 0.0
+
+        for batch in train_loader:
+            x      = batch[0].to(device)
+            labels = batch[2].to(device)   # annotation_label; -1 if unlabeled
+
+            x_aug = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
+
+            z1 = model.encode(x)
+            z2 = model.encode(x_aug)
+
+            recon      = model.decode(z1)
+            proj1      = model.project(z1)
+            proj2      = model.project(z2)
+
+            # 2N-sized batch for SupCon loss
+            proj_all   = torch.cat([proj1, proj2], dim=0)              # (2N, D)
+            labels_all = torch.cat([labels, labels], dim=0)            # (2N,)
+
+            rl = F.mse_loss(recon, x, reduction="mean")
+            cl = supcon_loss(proj_all, labels_all, temperature=temperature)
+            loss = lambda_recon * rl + lambda_contrast * cl
+
+            optimizer.zero_grad(); loss.backward(); optimizer.step()
+            tl += loss.item(); tr += rl.item(); tc += cl.item()
+
+        n = len(train_loader)
+        tl /= n; tr /= n; tc /= n
+        train_losses.append(tl); train_recon.append(tr); train_contrast.append(tc)
+
+        model.eval()
+        vl = vr = vc = 0.0
+        with torch.no_grad():
+            for batch in val_loader:
+                x      = batch[0].to(device)
+                labels = batch[2].to(device)
+                x_aug  = augment_contrastive_view(x, noise_prob=noise_prob)
+
+                z1 = model.encode(x)
+                z2 = model.encode(x_aug)
+
+                recon      = model.decode(z1)
+                proj1      = model.project(z1)
+                proj2      = model.project(z2)
+
+                proj_all   = torch.cat([proj1, proj2], dim=0)
+                labels_all = torch.cat([labels, labels], dim=0)
+
+                rl = F.mse_loss(recon, x, reduction="mean")
+                cl = supcon_loss(proj_all, labels_all, temperature=temperature)
+                loss = lambda_recon * rl + lambda_contrast * cl
+
+                vl += loss.item(); vr += rl.item(); vc += cl.item()
+
+        n = len(val_loader)
+        vl /= n; vr /= n; vc /= n
+        val_losses.append(vl); val_recon.append(vr); val_contrast.append(vc)
+
+        if (epoch + 1) % error_print_period == 0:
+            print(
+                f"SupCon AE  epoch {epoch+1}/{epochs} | "
+                f"train total={tl:.4f} recon={tr:.4f} contrast={tc:.4f} | "
+                f"val   total={vl:.4f} recon={vr:.4f} contrast={vc:.4f}"
+            )
+
+        if (epoch + 1) % recon_view_period == 0:
+            fig = plot_reconstruction_progress(model, val_loader, device, epoch + 1)
+            fig.savefig(os.path.join(result_dir, f"supcon_recon_ep{epoch+1}.png"))
+            plt.close(fig)
+
+            model.eval()
+            with torch.no_grad():
+                for batch in val_loader:
+                    x     = batch[0].to(device)
+                    x_aug = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
+                    recon, _ = model(x)
+                    x = x.cpu(); x_aug = x_aug.cpu(); recon = recon.cpu()
+                    break
+
+            n_show = min(6, x.size(0))
+            fig2, axes = plt.subplots(3, n_show, figsize=(n_show, 3))
+            for i in range(n_show):
+                axes[0, i].imshow(x[i].squeeze(),     cmap="gray", vmin=0, vmax=1)
+                axes[0, i].axis("off")
+                axes[1, i].imshow(x_aug[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+                axes[1, i].axis("off")
+                axes[2, i].imshow(recon[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+                axes[2, i].axis("off")
+            axes[0, 0].set_ylabel("clean", fontsize=7)
+            axes[1, 0].set_ylabel("aug",   fontsize=7)
+            axes[2, 0].set_ylabel("recon", fontsize=7)
+            plt.suptitle(f"SupCon AE @ epoch {epoch+1}")
+            plt.tight_layout()
+            fig2.savefig(os.path.join(result_dir, f"supcon_views_ep{epoch+1}.png"))
+            plt.close(fig2)
+            torch.save(model, os.path.join(result_dir, f"supcon_model_ep{epoch+1}.pt"))
+
+    for name, arr in [
+        ("sc_train_total",    train_losses),   ("sc_val_total",    val_losses),
+        ("sc_train_recon",    train_recon),    ("sc_val_recon",    val_recon),
+        ("sc_train_contrast", train_contrast), ("sc_val_contrast", val_contrast),
+    ]:
+        joblib.dump(arr, os.path.join(result_dir, f"{name}.pkl"))
+
+    _save_loss_curves(train_losses, val_losses, epochs,
+                      "SupCon AE Total Loss", result_dir, "supcon")
     return model, train_losses, val_losses
 
 

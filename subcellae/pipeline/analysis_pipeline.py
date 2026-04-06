@@ -86,6 +86,7 @@ class AnalysisConfig:
     umap_min_dist: float    = 0.1
     umap_random_state: int  = 42
     phate_k: int            = 5
+    umap_model_pkl: str     = ""    # if set, load & transform instead of fit_transform
 
     # --- clustering ---
     kmeans_enabled: bool    = True
@@ -251,21 +252,25 @@ def _metric_by_group_and_split(
     """Box/violin plot with x=group, hue=split → 2 boxes per condition group."""
     sub = df[df[metric_col].notna() & np.isfinite(df[metric_col])].copy()
     hue_order = [s for s in ["train", "val"] if s in sub["split"].values]
+    use_hue = len(hue_order) > 0
     n_groups = len(group_order)
     fig, ax = plt.subplots(figsize=(max(5, n_groups * 2.5), 4))
     if kind == "violin":
         sns.violinplot(data=sub, x=group_col, y=metric_col,
-                       hue="split", hue_order=hue_order,
+                       hue="split" if use_hue else None,
+                       hue_order=hue_order if use_hue else None,
                        order=group_order, ax=ax, inner="box", split=False)
     else:
         sns.boxplot(data=sub, x=group_col, y=metric_col,
-                    hue="split", hue_order=hue_order,
+                    hue="split" if use_hue else None,
+                    hue_order=hue_order if use_hue else None,
                     order=group_order, ax=ax)
     ax.set_xticklabels(ax.get_xticklabels(), rotation=40, ha="right", fontsize=8)
     ax.set_title(title)
     ax.set_xlabel(group_col)
     ax.set_ylabel(metric_col)
-    ax.legend(title="split", fontsize=8)
+    if use_hue:
+        ax.legend(title="split", fontsize=8)
     fig.tight_layout()
     fig.savefig(str(save_path), dpi=150)
     plt.close(fig)
@@ -427,15 +432,20 @@ def run_analysis_pipeline(cfg: AnalysisConfig):
     for method in cfg.umap_methods:
         log.info("  %s …", method)
         if method.upper() == "UMAP":
-            from umap import UMAP
-            reducer = UMAP(
-                n_components=2,
-                n_neighbors=cfg.umap_n_neighbors,
-                min_dist=cfg.umap_min_dist,
-                random_state=cfg.umap_random_state,
-            )
-            emb = reducer.fit_transform(latents)
-            joblib.dump(reducer, str(cfg.out_dir / "umap_model.pkl"))
+            if cfg.umap_model_pkl:
+                log.info("    Loading pre-trained UMAP from %s", cfg.umap_model_pkl)
+                reducer = joblib.load(cfg.umap_model_pkl)
+                emb = reducer.transform(latents)
+            else:
+                from umap import UMAP
+                reducer = UMAP(
+                    n_components=2,
+                    n_neighbors=cfg.umap_n_neighbors,
+                    min_dist=cfg.umap_min_dist,
+                    random_state=cfg.umap_random_state,
+                )
+                emb = reducer.fit_transform(latents)
+                joblib.dump(reducer, str(cfg.out_dir / "umap_model.pkl"))
 
         elif method.upper() == "PHATE":
             try:

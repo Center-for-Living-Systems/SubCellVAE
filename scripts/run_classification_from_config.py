@@ -54,8 +54,9 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Classi
     label_col      = str(_get("labels", "label_col",      "annotation_label_name"))
     label_csv      = str(_get("labels", "label_csv",      "") or "")
     filename_col   = str(_get("labels", "filename_col",   "filename"))
-    label_order    = _get("labels", "label_order",    None)
-    exclude_labels = _get("labels", "exclude_labels", None)
+    label_order             = _get("labels", "label_order",             None)
+    exclude_labels          = _get("labels", "exclude_labels",          None)
+    metrics_exclude_labels  = _get("labels", "metrics_exclude_labels",  None)
 
     # ---- features ----
     feature_cols           = _get("features", "feature_cols",           None)
@@ -66,6 +67,9 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Classi
     test_size      = float(_get("split", "test_size",  0.2))
     random_state   = int(_get("split",  "random_state", 42))
 
+    # ---- classifier ----
+    classifier_type   = str(_get("classifier", "type",              "lgbm"))
+
     # ---- lightgbm ----
     n_estimators      = int(_get("lightgbm",   "n_estimators",      500))
     learning_rate     = float(_get("lightgbm", "learning_rate",     0.05))
@@ -73,6 +77,17 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Classi
     min_child_samples = int(_get("lightgbm",   "min_child_samples", 20))
     class_weight      = str(_get("lightgbm",   "class_weight",      "balanced") or "balanced")
     n_cv_folds        = int(_get("lightgbm",   "n_cv_folds",        0))
+
+    # ---- svm ----
+    svm_C     = float(_get("svm", "C",     10.0))
+    svm_gamma = str(_get("svm",   "gamma", "scale"))
+
+    # ---- mlp ----
+    mlp_hidden_layers = _get("mlp", "hidden_layers", None)
+    mlp_max_iter      = int(_get("mlp", "max_iter",  1000))
+
+    # ---- knn ----
+    knn_n_neighbors = int(_get("knn", "n_neighbors", 10))
 
     # ---- distance features ----
     dist_patch_prep_dirs  = _get("dist_features", "patch_prep_dirs",    None) or []
@@ -90,17 +105,24 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Classi
         filename_col=filename_col,
         label_order=label_order,
         exclude_labels=exclude_labels,
+        metrics_exclude_labels=metrics_exclude_labels,
         feature_cols=feature_cols,
         include_mean_intensity=include_mean_intensity,
         split_strategy=split_strategy,
         test_size=test_size,
         random_state=random_state,
+        classifier_type=classifier_type,
         n_estimators=n_estimators,
         learning_rate=learning_rate,
         num_leaves=num_leaves,
         min_child_samples=min_child_samples,
         class_weight=class_weight,
         n_cv_folds=n_cv_folds,
+        svm_C=svm_C,
+        svm_gamma=svm_gamma,
+        mlp_hidden_layers=mlp_hidden_layers,
+        mlp_max_iter=mlp_max_iter,
+        knn_n_neighbors=knn_n_neighbors,
         dist_patch_prep_dirs=dist_patch_prep_dirs,
         dist_feature_weight=dist_feature_weight,
         sort_labelled=sort_labelled,

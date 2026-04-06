@@ -39,7 +39,7 @@ from subcellae.utils.config_utils import resolve_root
 # YAML → PipelineConfig
 # ---------------------------------------------------------------------------
 
-def load_config(yaml_path: str | Path, root_folder: str | None = None) -> PipelineConfig:
+def load_config(yaml_path: str | Path, root_folder: str | None = None, channel_override: int | None = None) -> PipelineConfig:
     """Parse a YAML config file and return a :class:`PipelineConfig`.
 
     Parameters
@@ -63,13 +63,23 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Pipeli
     def _get(section: str, key: str, default=None):
         return raw.get(section, {}).get(key, default)
 
+    # If a specific channel is requested (multichannel loop), override dirs
+    major_ch = channel_override if channel_override is not None else int(_get("experiment", "major_ch", 1))
+    patch_output_dir = Path(_get("paths", "patch_output_dir"))
+    plot_output_dir  = Path(_get("paths", "plot_output_dir"))
+    if channel_override is not None:
+        patch_output_dir = patch_output_dir.parent / (patch_output_dir.name + f"_ch{channel_override}")
+        plot_output_dir  = plot_output_dir.parent  / (plot_output_dir.name  + f"_ch{channel_override}")
+        norm_channels = [channel_override]
+    else:
+        patch_output_dir = patch_output_dir
+        plot_output_dir  = plot_output_dir
+        norm_channels = _get("normalization", "norm_channels", None)
+
     # ---- paths ----
     image_folder      = Path(_get("paths", "image_folder"))
     raw_cell_mask     = _get("paths", "cell_mask_folder")   # may be None
     cell_mask_folder  = Path(raw_cell_mask) if raw_cell_mask is not None else None
-
-    patch_output_dir = Path(_get("paths", "patch_output_dir"))
-    plot_output_dir  = Path(_get("paths", "plot_output_dir"))
 
     # ---- build and return ----
     return PipelineConfig(
@@ -81,7 +91,7 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Pipeli
 
         # experiment
         condition   = _get("experiment", "condition", "shared"),
-        major_ch    = int(_get("experiment", "major_ch", 1)),
+        major_ch    = major_ch,
 
         # input
         file_type   = _get("input", "file_type", "czi"),
@@ -95,10 +105,12 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Pipeli
         patch_prefix = str(_get("patch",  "patch_prefix", "") or ""),
 
         # normalization
-        norm_mode     = _get("normalization", "norm_mode",     None),
-        norm_channels = _get("normalization", "norm_channels", None),
-        norm_lo       = float(_get("normalization", "norm_lo", 1.0)),
-        norm_hi       = float(_get("normalization", "norm_hi", 99.0)),
+        norm_mode           = _get("normalization", "norm_mode",           None),
+        norm_channels       = norm_channels,
+        norm_lo             = float(_get("normalization", "norm_lo",       1.0)),
+        norm_hi             = float(_get("normalization", "norm_hi",       99.0)),
+        norm_dataset_folder = _get("normalization", "norm_dataset_folder", None),
+        norm_cell_scale     = float(_get("normalization", "norm_cell_scale", 5.0)),
 
         # segmentation
         seg_ch               = _get("segmentation", "seg_ch",               None),
@@ -113,6 +125,9 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Pipeli
         max_shift_px    = int(_get("augmentation",  "max_shift_px",  0)),
         rand_rota_flag  = bool(_get("augmentation", "rand_rota",     False)),
         max_angle_deg   = float(_get("augmentation","max_angle_deg", 0.0)),
+
+        # preprocessing
+        rolling_ball_radius = _get("preprocessing", "rolling_ball_radius", None),
 
         # misc
         dpi         = int(_get("misc", "dpi",   256)),
@@ -172,6 +187,31 @@ def main(argv: list[str] | None = None) -> None:
 
     log = logging.getLogger(__name__)
     log.info("Loading config from: %s", args.config)
+
+    # Check for multichannel mode: experiment.channels overrides experiment.major_ch
+    channels = _raw.get("experiment", {}).get("channels", None)
+
+    if channels is not None:
+        # --- multichannel mode: run pipeline once per channel ---
+        log.info("Multichannel mode: extracting channels %s into separate folders.", channels)
+        for ch in channels:
+            log.info("=== Channel %d ===", ch)
+            cfg = load_config(args.config, root_folder=args.root_folder, channel_override=int(ch))
+            if args.dry_run:
+                print(f"\n=== DRY RUN – channel {ch} – resolved PipelineConfig ===")
+                for k, v in vars(cfg).items():
+                    print(f"  {k:<35} {v}")
+                continue
+            record = run_pipeline(cfg)
+            log.info(
+                "Channel %d done. %d total patches across files %d–%d.",
+                ch, len(record), cfg.start_ind, cfg.end_ind - 1,
+            )
+            cfg.movie_plot_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(args.config, cfg.movie_plot_dir / Path(args.config).name)
+        if args.dry_run:
+            print("\nNo files processed. Remove --dry_run to run for real.")
+        return
 
     cfg = load_config(args.config, root_folder=args.root_folder)
 

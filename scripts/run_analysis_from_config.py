@@ -58,6 +58,7 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Analys
     umap_min_dist     = float(_get("embedding","umap_min_dist",     0.1))
     umap_random_state = int(_get("embedding",  "umap_random_state", 42))
     phate_k           = int(_get("embedding",  "phate_k",           5))
+    umap_model_pkl    = str(_get("embedding",  "umap_model_pkl",    "") or "")
 
     # ---- clustering ----
     kmeans_enabled    = bool(_get("clustering", "kmeans_enabled",    True))
@@ -81,6 +82,7 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Analys
         umap_min_dist=umap_min_dist,
         umap_random_state=umap_random_state,
         phate_k=phate_k,
+        umap_model_pkl=umap_model_pkl,
         kmeans_enabled=kmeans_enabled,
         kmeans_n_clusters=kmeans_n_clusters,
         dbscan_enabled=dbscan_enabled,

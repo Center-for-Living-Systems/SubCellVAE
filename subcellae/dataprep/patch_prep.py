@@ -63,6 +63,7 @@ from skimage.measure import label, regionprops
 from skimage.morphology import (
     binary_closing, binary_opening, disk, remove_small_objects,
 )
+from skimage.restoration import rolling_ball
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +495,79 @@ def segment_cell_mask(
 
 
 # ---------------------------------------------------------------------------
+# Cell inside/outside normalization
+# ---------------------------------------------------------------------------
+
+def normalize_cell_insideoutside(
+    img: np.ndarray,
+    seg: np.ndarray,
+    scale: float = 5.0,
+) -> np.ndarray:
+    """Normalize using the cell mask to separate background from signal.
+
+    Steps
+    -----
+    1. ``int1 = img - median(pixels where seg == 0)``  — subtract background
+    2. ``int2 = int1 / mean(int1 where seg > 0)``      — scale by mean in-cell signal
+    3. Return ``int2 / scale``                          — divide by constant to keep
+       values in a reasonable range (default scale = 5)
+
+    Parameters
+    ----------
+    img:
+        2-D float image (unpadded, same shape as *seg*).
+    seg:
+        2-D segmentation mask (unpadded). Zero = outside cell, nonzero = inside.
+    scale:
+        Constant divisor applied after step 2. Default ``5.0``.
+
+    Returns
+    -------
+    np.ndarray
+        Normalised image (not clipped; values near [0, 1] for typical images).
+    """
+    outside = seg == 0
+    inside  = seg > 0
+
+    bg = float(np.median(img[outside])) if outside.any() else 0.0
+    int1 = img - bg
+
+    mean_inside = float(np.mean(int1[inside])) if inside.any() else 1.0
+    if mean_inside == 0.0:
+        mean_inside = 1.0
+
+    return int1 / (mean_inside * scale)
+
+
+# ---------------------------------------------------------------------------
+# Rolling-ball background subtraction
+# ---------------------------------------------------------------------------
+
+def apply_rolling_ball(img: np.ndarray, radius: float) -> np.ndarray:
+    """Subtract a rolling-ball background estimate from *img*.
+
+    Uses :func:`skimage.restoration.rolling_ball` to estimate the slowly-
+    varying background, then subtracts it and clips the result to ``[0, 1]``.
+    Applied per 2-D channel image **before** normalization.
+
+    Parameters
+    ----------
+    img:
+        2-D float array (values in nominal ``[0, 1]`` range after raw load).
+    radius:
+        Radius of the rolling ball in pixels.  Larger values remove broader
+        background variations.  Typical range: 20–200 px.
+
+    Returns
+    -------
+    np.ndarray
+        Background-subtracted image clipped to ``[0, 1]``.
+    """
+    background = rolling_ball(img, radius=radius)
+    return np.clip(img - background, 0, None)
+
+
+# ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
 
@@ -515,6 +589,8 @@ def load_and_pad(
     seg_min_size_initial: int = 3,
     seg_min_size_post_close: int = 10,
     seg_min_size_final: int = 30000,
+    rolling_ball_radius: Optional[float] = None,
+    norm_cell_scale: float = 5.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Load an image + cell mask, optionally normalize, then pad both.
 
@@ -572,6 +648,10 @@ def load_and_pad(
     raw = _load_raw_squeezed(image_folder, filename, file_type)
     img = _extract_channel(raw, major_ch, filename, file_type)
 
+    # --- rolling-ball background subtraction (before normalization) ---
+    if rolling_ball_radius is not None:
+        img = apply_rolling_ball(img, radius=rolling_ball_radius)
+
     # --- segmentation mask ---
     # Use pre-computed mask if folder is given and non-empty; otherwise segment on the fly.
     _use_file_mask = (
@@ -596,14 +676,17 @@ def load_and_pad(
         ).astype(float)
 
     # --- normalization (applied to image channel only) ---
-    img = normalize_image(
-        img,
-        channel=major_ch,
-        norm_mode=norm_mode,
-        norm_stats=norm_stats,
-        lo=norm_lo,
-        hi=norm_hi,
-    )
+    if norm_mode == "cell_insideoutside":
+        img = normalize_cell_insideoutside(img, seg, scale=norm_cell_scale)
+    else:
+        img = normalize_image(
+            img,
+            channel=major_ch,
+            norm_mode=norm_mode,
+            norm_stats=norm_stats,
+            lo=norm_lo,
+            hi=norm_hi,
+        )
 
     # --- padding ---
     if img_pad_val is None:

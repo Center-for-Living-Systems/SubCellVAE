@@ -29,6 +29,9 @@ split:
   test_size   : 0.2
   random_state: 42
 
+classifier:
+  type : "svm"   # "lgbm" | "svm" | "mlp" | "knn"
+
 lightgbm:
   n_estimators     : 500
   learning_rate    : 0.05
@@ -36,6 +39,17 @@ lightgbm:
   min_child_samples: 20
   class_weight     : "balanced"
   n_cv_folds       : 5
+
+svm:
+  C     : 10.0
+  gamma : "scale"
+
+mlp:
+  hidden_layers : [64, 32]
+  max_iter      : 1000
+
+knn:
+  n_neighbors : 10
 
 dist_features:
   patch_prep_dirs: null

@@ -1,0 +1,61 @@
+# =============================================================================
+# Patch-prep: new validation data – ycomp group – ALL 4 CHANNELS
+# Extracts patches for channels 0,1,2,3 into separate subdirectories:
+#   tiff_patches32_ch0/  tiff_patches32_ch1/  tiff_patches32_ch2/  tiff_patches32_ch3/
+#
+# Segmentation mask is always loaded from cell_mask_folder (computed on ch1).
+# Normalization: per-channel dataset-level percentile stretch (0.2–99.8%).
+# =============================================================================
+
+paths:
+  root_folder       : "/home/lding/lding/fa_data_analysis"
+  image_folder      : "/home/lding/lding/fa_data_analysis/fa_data/pPax_data/eGFP-Zyxin488_Phalloidin405_pPaxy118rb647_PaxM568/Y-comp"
+  cell_mask_folder  : "/home/lding/lding/fa_data_analysis/fa_cellseg/pPax_analyis/y_ch1_major/code_org_20250902_seg/mask"
+  patch_output_dir  : root_folder + "/ae_results/newdata_validation/patches/ycomp/tiff_patches32"
+  plot_output_dir   : root_folder + "/ae_results/newdata_validation/patches/ycomp/plot_patches32"
+
+experiment:
+  condition : "ycomp"
+  channels  : [0, 1, 2, 3]   # multichannel mode — major_ch is ignored
+
+input:
+  file_type : "czi"
+  start_ind : 0
+  end_ind   : 11
+
+patch:
+  patch_size   : 32
+  mask_ratio   : 0.4
+  pad_size     : 64
+  patch_prefix : ""
+
+preprocessing:
+  rolling_ball_radius : null   # set to a pixel radius (e.g. 100) to enable background subtraction
+
+normalization:
+  norm_mode           : "dataset"   # null | "image" | "dataset" | "cell_insideoutside"
+  norm_channels       : null        # overridden per channel in multichannel mode
+  norm_lo             : 0.2
+  norm_hi             : 99.8
+  norm_dataset_folder : null        # set to control image_folder to use control percentiles
+  norm_cell_scale     : 5.0         # divisor for cell_insideoutside mode
+
+segmentation:
+  seg_ch               : 1    # always segment on ch1 (paxillin / reference channel)
+  seg_threshold        : 0.2
+  seg_close_size       : 5
+  seg_min_size_initial : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final   : 30000
+
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+misc:
+  dpi           : 256
+  debug         : false
+  log_level     : "INFO"
+  use_timestamp : false

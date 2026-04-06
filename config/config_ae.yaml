@@ -67,10 +67,11 @@ model:
                                # keep low (0.1–0.3) so recon loss remains dominant
 
   # -- Contrastive-specific (only used when model_type = "contrastive") ----
-  # proj_dim        : 64         # projection-head output dim for NT-Xent loss
-  # noise_prob      : 0.05       # salt-and-pepper corruption probability
-  # temperature     : 0.5        # NT-Xent softmax temperature
-  # lambda_contrast : 0.5        # weight on the contrastive term
+  # proj_dim              : 64           # projection-head output dim for NT-Xent loss
+  # noise_prob            : 0.05         # salt-and-pepper corruption probability
+  # temperature           : 0.5          # NT-Xent softmax temperature
+  # lambda_contrast       : 0.5          # weight on the contrastive term
+  # intensity_scale_range : [0.8, 1.2]   # per-image intensity multiplier range
 
 # ---------------------------------------------------------------------------
 # Annotation  –  required for model_type = "semisup"

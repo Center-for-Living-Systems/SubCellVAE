@@ -1,0 +1,33 @@
+# =============================================================================
+# Whole-image overlay: baseline AE | FA type | lat8+dist8 features
+# Results: ae_results/newdata_validation/baseline/fa_cls_lat8dist8/overlay/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+input:
+  predictions_csv : root_folder + "/ae_results/newdata_validation/baseline/fa_cls_lat8dist8/predictions_all.csv"
+
+output:
+  out_dir : root_folder + "/ae_results/newdata_validation/baseline/fa_cls_lat8dist8/overlay"
+
+labels:
+  label_order:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+  colors:
+    - "#e6194b"
+    - "#f58231"
+    - "#3cb44b"
+    - "#4363d8"
+    - "#aaaaaa"
+
+misc:
+  pad_size     : 64
+  image_size   : 1024
+  linewidth    : 0.6
+  dpi          : 300
+  title_prefix : "FA type | baseline | lat8+dist8"
+  log_level    : "INFO"

@@ -1,0 +1,62 @@
+# =============================================================================
+# AE variant: supervised contrastive  (SupCon AE)
+# Augmented view: random H/V flips + salt-and-pepper noise (no intensity scaling)
+# Contrastive loss: SupCon — same-class patches across images as positives
+# Results: ae_results/contrastive_run/supcon/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+data:
+  patch_dirs:
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_control"
+      condition      : 0
+      condition_name : "control"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_ycomp"
+      condition      : 1
+      condition_name : "ycomp"
+
+output:
+  result_dir : root_folder + "/ae_results/contrastive_run/supcon"
+
+model:
+  model_type   : "supcon"
+  latent_dim   : 8
+  input_ps     : 32
+  no_ch        : 1
+  BN_flag      : false
+  dropout_flag : false
+
+  # -- Contrastive-specific --------------------------------------------------
+  proj_dim        : 64     # projection-head output dim for SupCon loss
+  noise_prob      : 0.05   # salt-and-pepper corruption probability
+  temperature     : 0.1    # SupCon temperature (lower = sharper discrimination)
+  lambda_recon    : 1.0    # weight on the reconstruction term
+  lambda_contrast : 1.0    # weight on the SupCon term
+
+annotation:
+  annotation_file : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  label_col       : "classification"
+  filename_col    : "unique_ID"
+  label_order:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+
+training:
+  epochs         : 500
+  lr             : 0.001
+  batch_size     : 128
+  val_split      : 0.2
+  loss_norm_flag : false
+  group_split    : true
+
+reconstruction:
+  save_recon      : true
+  recon_pad_size  : 64
+  recon_image_size: 1024
+
+misc:
+  device    : "auto"
+  log_level : "INFO"

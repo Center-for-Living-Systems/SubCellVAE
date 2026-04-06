@@ -22,7 +22,7 @@ inference:
   batch_size : 128
 
 reconstruction:
-  save_recon       : false
+  save_recon       : true
   recon_pad_size   : 64
   recon_image_size : 1024
 

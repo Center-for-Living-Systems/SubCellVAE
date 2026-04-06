@@ -43,11 +43,12 @@ patch:
 # Normalization  –  per-dataset 0.2 %–99 % percentile stretch
 # ---------------------------------------------------------------------------
 normalization:
-  norm_mode     : "dataset"   # null | "image" | "dataset"
-  norm_channels : [1]         # channels to include in dataset-level stat computation
-                              # e.g. [0, 1, 2, 3] for all four channels
-  norm_lo       : 0.2         # lower percentile bound
-  norm_hi       : 99.8        # upper percentile bound
+  norm_mode           : "dataset"   # null | "image" | "dataset"
+  norm_channels       : [1]         # channels to include in dataset-level stat computation
+                                    # e.g. [0, 1, 2, 3] for all four channels
+  norm_lo             : 0.2         # lower percentile bound
+  norm_hi             : 99.8        # upper percentile bound
+  norm_dataset_folder : null        # set to control image_folder to use control percentiles
 
 # ---------------------------------------------------------------------------
 # Segmentation  –  parameters for on-the-fly fallback (ignored when file mask is used)

@@ -1,0 +1,108 @@
+# =============================================================================
+# LightGBM classification pipeline configuration – Position labels
+# Reads latents.csv from the AE pipeline and runs supervised classification
+# using the "Position" column (cell location label).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Root folder  –  change ONLY this when switching computers.
+# All data/result paths below are rooted here.
+# ---------------------------------------------------------------------------
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+# ---------------------------------------------------------------------------
+# Input / Output
+# ---------------------------------------------------------------------------
+input:
+  latents_csv : root_folder + "/ae_results/test_run/test_run_overfit_20260322/semisup_both/latents.csv"
+
+output:
+  out_dir : root_folder + "/ae_results/test_run/test_run_overfit_20260322/semisup_both/fromscv_position_classification_lat8dist8"
+
+# ---------------------------------------------------------------------------
+# Labels
+# ---------------------------------------------------------------------------
+labels:
+  # Column to use as the classification target.
+  label_col   : "Position"
+
+  # Optional: path to an external CSV / Excel with labels.
+  label_csv : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+
+  # Column used to join external label_csv to latents.csv (both must have it).
+  filename_col: "unique_ID"
+
+  # Ordered class names – defines class 0, 1, 2, ...
+  label_order:
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"   
+
+  # Labels to drop entirely before training (null to keep all).
+  exclude_labels: null
+
+# ---------------------------------------------------------------------------
+# Features
+# ---------------------------------------------------------------------------
+features:
+  # Explicit list of feature columns.  null → auto-detect all z_* columns.
+  feature_cols: null
+
+  # Also include mean_intensity as a feature.
+  include_mean_intensity: false
+
+# ---------------------------------------------------------------------------
+# Train / val split
+# ---------------------------------------------------------------------------
+split:
+  # "from_csv"   : use the 'split' column already in latents.csv
+  #                (group-aware, consistent with AE training)
+  # "stratified" : fresh stratified random split
+  strategy    : "from_csv"
+  test_size   : 0.2      # only used for strategy: stratified
+  random_state: 42
+
+# ---------------------------------------------------------------------------
+# LightGBM
+# ---------------------------------------------------------------------------
+lightgbm:
+  n_estimators     : 500
+  learning_rate    : 0.05
+  num_leaves       : 31
+  min_child_samples: 20
+  class_weight     : "balanced"   # "balanced" or null
+
+  # Stratified k-fold cross-validation (0 = skip, run train/val only)
+  n_cv_folds: 5
+
+# ---------------------------------------------------------------------------
+# Distance features (optional – latent + dist combined classification)
+# ---------------------------------------------------------------------------
+dist_features:
+  # List of patch-prep output directories (one per condition).
+  # Each dir is searched for the data_prep_record_*_to_<N>.csv with the
+  # largest N; those CSVs are concatenated and merged into the latents by
+  # filename.  Leave as null / [] to use latent features only.
+  # patch_prep_dirs: null
+  patch_prep_dirs:
+    - root_folder + "/ae_results/pax_ch_patch/plot_control"
+    - root_folder + "/ae_results/pax_ch_patch/plot_ycomp"
+
+  # Multiplicative weight for d* columns before classification and UMAP.
+  feature_weight: 20.0
+
+# ---------------------------------------------------------------------------
+# Patch sorting
+# ---------------------------------------------------------------------------
+patch_sort:
+  # Copy labelled patches (train + val splits) into gt{x}pred{y} folders.
+  sort_labelled  : true
+  # Copy unlabelled patches (no ground-truth, "test" folder) into gtnpred{y} folders.
+  sort_unlabelled: false
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+misc:
+  log_level : "INFO"   # DEBUG | INFO | WARNING | ERROR

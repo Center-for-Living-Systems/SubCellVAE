@@ -218,8 +218,11 @@ def run_cls_apply_pipeline(cfg: ClsApplyConfig) -> pd.DataFrame:
         feat_cols = sorted([c for c in df.columns if c.startswith("z_")])
 
     if cfg.dist_patch_prep_dirs:
-        dist_feat_cols = [c for c in df.columns
-                          if (c.startswith("d") and c[1:].isdigit()) or c == "equiv_diam"]
+        # Match the feature selection used during training: d\d{2} columns only
+        # (equiv_diam is merged but excluded from the feature matrix, same as
+        # classification_pipeline.py line: d_feats = [c for c in dist_cols if c.startswith("d")])
+        import re as _re
+        dist_feat_cols = [c for c in df.columns if _re.fullmatch(r"d\d{2}", c)]
         feat_cols = feat_cols + dist_feat_cols
 
     X = df[feat_cols].values.astype(np.float32)
@@ -242,14 +245,17 @@ def run_cls_apply_pipeline(cfg: ClsApplyConfig) -> pd.DataFrame:
     pred_labels  = clf.predict(X)
     pred_probas  = clf.predict_proba(X)
 
-    classes = list(cfg.label_order) if cfg.label_order else list(clf.classes_)
+    # clf.classes_ may be integer indices [0,1,2,...]; pred_labels are numpy
+    # integers.  Always map to string class names so downstream plots work.
+    if cfg.label_order:
+        classes = list(cfg.label_order)
+        df["pred_label"] = [classes[int(i)] for i in pred_labels]
+    else:
+        classes = [str(c) for c in clf.classes_]
+        df["pred_label"] = [str(i) for i in pred_labels]
     log.info("  Classes: %s", classes)
 
-    # Use the same column names as classification_pipeline so that
-    # run_cross_classification_vis.py can consume these files directly.
-    df["pred_label"] = [classes[i] if isinstance(i, int) else str(i)
-                        for i in pred_labels]
-    df["max_prob"]   = pred_probas.max(axis=1)
+    df["max_prob"] = pred_probas.max(axis=1)
     for j, cls_name in enumerate(clf.classes_):
         df[f"proba_{cls_name}"] = pred_probas[:, j]
 
