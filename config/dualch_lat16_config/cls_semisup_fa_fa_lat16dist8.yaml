@@ -1,0 +1,66 @@
+# =============================================================================
+# Classification: FA type | Dual-ch AE: semisup_fa | Features: lat8dist8
+# Results: ae_results/dualch_run_lat16/semisup_fa/fa_cls_lat16dist8/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  latents_csv : root_folder + "/ae_results/dualch_run_lat16/semisup_fa/latents.csv"
+
+output:
+  out_dir : root_folder + "/ae_results/dualch_run_lat16/semisup_fa/fa_cls_lat16dist8"
+
+labels:
+  label_col    : "classification"
+  label_csv    : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  filename_col : "unique_ID"
+  label_order  :
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+  exclude_labels: null
+
+features:
+  feature_cols          : null
+  include_mean_intensity: false
+
+split:
+  strategy    : "from_csv"
+  test_size   : 0.2
+  random_state: 42
+
+classifier:
+  type : "svm"
+
+lightgbm:
+  n_estimators     : 500
+  learning_rate    : 0.05
+  num_leaves       : 31
+  min_child_samples: 20
+  class_weight     : "balanced"
+  n_cv_folds       : 5
+
+svm:
+  C     : 10.0
+  gamma : "scale"
+
+mlp:
+  hidden_layers : [64, 32]
+  max_iter      : 1000
+
+knn:
+  n_neighbors : 10
+
+dist_features:
+  patch_prep_dirs:
+    - root_folder + "/ae_results/pax_ch_patch/plot_control_ch1"
+    - root_folder + "/ae_results/pax_ch_patch/plot_ycomp_ch1"
+  feature_weight : 20.0
+
+patch_sort:
+  sort_labelled  : true
+  sort_unlabelled: false
+
+misc:
+  log_level : "INFO"

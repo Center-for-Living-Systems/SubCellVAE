@@ -1,0 +1,60 @@
+# =============================================================================
+# Patch-prep pipeline configuration – control – ALL 4 CHANNELS
+# File type  : .czi
+# Norm mode  : dataset  (per-channel 0.2%–99.8% percentile stretch)
+# Seg mode   : file mask (cell_mask_folder)
+#
+# Extracts patches for channels 0,1,2,3 into separate subdirectories:
+#   patch_control_ch0/  patch_control_ch1/  patch_control_ch2/  patch_control_ch3/
+# =============================================================================
+
+paths:
+  root_folder       : "/home/lding/lding/fa_data_analysis"   # change ONLY this when switching computers
+  image_folder      : root_folder + "/fa_data/031125data/Control"
+  cell_mask_folder  : root_folder + "/fa_cellseg/031125analysis/control/code_org_20250820_seg/mask"
+  patch_output_dir  : root_folder + "/ae_results/pax_ch_patch/patch_control"
+  plot_output_dir   : root_folder + "/ae_results/pax_ch_patch/plot_control"
+
+experiment:
+  condition : "czi_dataset_norm"
+  channels  : [0, 1, 2, 3]   # multichannel mode — major_ch is ignored
+
+input:
+  file_type : "czi"
+  start_ind : 0
+  end_ind   : 999
+
+patch:
+  patch_size   : 32
+  mask_ratio   : 0.4
+  pad_size     : 64
+  patch_prefix : "control"
+
+preprocessing:
+  rolling_ball_radius : null   # set to a pixel radius (e.g. 100) to enable background subtraction
+
+normalization:
+  norm_mode           : "dataset"   # null | "image" | "dataset" | "cell_insideoutside"
+  norm_channels       : null        # overridden per channel in multichannel mode
+  norm_lo             : 0.2
+  norm_hi             : 99.8
+  norm_cell_scale     : 5.0         # divisor for cell_insideoutside mode
+
+segmentation:
+  seg_ch               : 3   # segment on ch3 (same as original)
+  seg_threshold        : 0.2
+  seg_close_size       : 5
+  seg_min_size_initial : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final   : 30000
+
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+misc:
+  dpi       : 256
+  debug     : false
+  log_level : "INFO"
