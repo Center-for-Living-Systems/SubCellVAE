@@ -234,16 +234,27 @@ The reference run (`test_run_overfit_20260322`) was intentionally set up to prob
 
 ---
 
-## Paxillin + Actin (P + A)
+## Paxillin + Actin (P + A) — Training Set (16-dim latent)
 
-| Model | Position | FA Classification | Pos (Dy2) | FA (Dy2) |
-|-------|----------|-------------------|----------|---------|
-| Baseline AE | <span class="tbd">—</span> | <span class="tbd">—</span> | <span class="tbd">—</span> | <span class="tbd">—</span> |
-| SemiSup AE (FA only) | <span class="tbd">—</span> | <span class="tbd">—</span> | <span class="tbd">—</span> | <span class="tbd">—</span> |
-| SemiSup AE (FA + Pos) | <span class="tbd">—</span> | <span class="tbd">—</span> | <span class="tbd">—</span> | <span class="tbd">—</span> |
-| Contrastive AE | <span class="tbd">—</span> | <span class="tbd">—</span> | <span class="tbd">—</span> | <span class="tbd">—</span> |
+Latent only (lat16):
 
-Multi-channel pipeline implemented; runs pending.
+| Model | Position | FA Classification |
+|-------|----------|-------------------|
+| Baseline AE | 58% | 44% |
+| SemiSup AE (FA only) | 49% | 17% |
+| SemiSup AE (Pos only) | 44% | 20% |
+| SemiSup AE (FA + Pos) | 51% | 25% |
+
+Adding distance features (lat16 + dist8):
+
+| Model | Position | FA Classification |
+|-------|----------|-------------------|
+| Baseline AE | **72%** | 44% |
+| SemiSup AE (FA only) | **75%** | 39% |
+| SemiSup AE (Pos only) | 70% | 38% |
+| SemiSup AE (FA + Pos) | 69% | 36% |
+
+Dy2 new-data validation: <span class="tbd">pending</span>
 
 ---
 
@@ -273,15 +284,17 @@ Multi-channel pipeline implemented; runs pending.
 
 | | Done | In progress |
 |--|------|-------------|
-| **Data** | Paxillin-only pipeline, patch extraction, normalization | Multi-channel (P+A, P+Z, P+V) runs |
-| **Models** | Baseline, SemiSup (FA / Both), Contrastive, SupCon | Hyperparameter tuning; contrastive Dy2 eval |
-| **Training eval** | All 6 model variants × lat8 + lat8dist8 | — |
-| **New-data (Dy2)** | Baseline + SemiSup (3 variants) labelled | Contrastive variants; more labelled patches |
+| **Data** | Paxillin-only pipeline, patch extraction, normalization | Multi-channel (P+Z, P+V) runs |
+| **Models** | Baseline, SemiSup (FA / Pos / Both), Contrastive, SupCon | Hyperparameter tuning; contrastive Dy2 eval |
+| **Training eval (paxillin)** | All 6 model variants × lat8 + lat8dist8 | — |
+| **Training eval (P+A)** | Baseline + SemiSup × lat16 + lat16dist8 | P+Z, P+V; contrastive multichannel |
+| **New-data (Dy2)** | Baseline + SemiSup (paxillin-only) | All multichannel variants; more labelled patches |
 
 **Key finding so far:**
 - SemiSup AE achieves high training-set accuracy (92–95%) but **does not generalize** to Dy2 in this overfit test run
 - Baseline AE (no label supervision) is more consistent across train and Dy2 (~47–64%)
-- Distance-to-edge features consistently help baseline position accuracy (+12 pp)
+- Distance-to-edge features consistently help position accuracy (+12–14 pp across all models)
+- P+A multichannel: position similar to paxillin-only baseline, **FA accuracy lower** (44% vs 62%) — actin doesn't add FA-type signal
 
 **Open question for the group:**
 > Is the train→Dy2 drop a fundamental limitation of semi-supervision, or can we fix it with better regularization / more labelled data?
