@@ -137,6 +137,43 @@ style: |
 
 ---
 
+## Classifier Train/Val Split — Two Strategies
+
+<div class="columns">
+<div>
+
+### `from_csv` (group-aware)
+- The `split` column in `latents.csv` is set **during AE training**: all patches from the same image file go to the same split (80% train / 20% val)
+- Classifier inherits this split exactly
+- **No image-level leakage**: train and val patches come from different microscopy images
+
+### `stratified` (random)
+- A fresh stratified random split is drawn **on individual patches**, ignoring which image they came from
+- Patches from the **same image** can appear in both train and val
+
+</div>
+<div>
+
+### Information Leakage Risk
+
+Patches from the same cell image share:
+- global illumination & background
+- cell shape and imaging artefacts
+- correlated local textures across nearby patches
+
+With `stratified` split, the classifier can **memorize image-level cues** rather than learning generalizable FA morphology.
+
+<div class="note">
+
+**Consequence:** `stratified` validation accuracy is **optimistically biased** — the model appears to perform well but may fail on images from a new experiment (e.g. Dy2). `from_csv` gives a more honest estimate of cross-image generalization.
+
+</div>
+
+</div>
+</div>
+
+---
+
 # Results
 ## Using Paxillin Only
 
