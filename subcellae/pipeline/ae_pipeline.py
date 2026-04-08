@@ -199,6 +199,12 @@ class AEConfig:
     loss_norm_flag: bool = False
     group_split: bool   = True   # keep all patches from the same image in the same split
 
+    # --- LR scheduler ---
+    lr_scheduler: str           = "none"   # "none" | "plateau" | "cosine"
+    lr_scheduler_patience: int  = 20       # epochs without improvement before reducing LR (plateau)
+    lr_scheduler_factor: float  = 0.5     # LR reduction factor (plateau)
+    lr_min: float               = 1e-6    # minimum LR floor
+
     # --- semisup regularisation / stability ---
     weight_decay: float          = 1e-4   # Adam L2 weight decay
     early_stopping_patience: int = 0      # 0 = disabled
@@ -835,6 +841,13 @@ def run_ae_pipeline(cfg: AEConfig):
     # ------------------------------------------------------------------
     result_dir_str = str(cfg.result_dir)
 
+    _sched_kwargs = dict(
+        lr_scheduler=cfg.lr_scheduler,
+        lr_scheduler_patience=cfg.lr_scheduler_patience,
+        lr_scheduler_factor=cfg.lr_scheduler_factor,
+        lr_min=cfg.lr_min,
+    )
+
     if cfg.model_type == "ae":
         model, _, _ = train_ae(
             model, train_loader, val_loader,
@@ -843,6 +856,7 @@ def run_ae_pipeline(cfg: AEConfig):
             lr=cfg.lr,
             loss_norm_flag=cfg.loss_norm_flag,
             result_dir=result_dir_str,
+            **_sched_kwargs,
         )
 
     elif cfg.model_type == "vae":
@@ -855,6 +869,7 @@ def run_ae_pipeline(cfg: AEConfig):
             recon_type=cfg.recon_type,
             result_dir=result_dir_str,
             beta_anneal=cfg.beta_anneal,
+            **_sched_kwargs,
         )
 
     elif cfg.model_type == "semisup":

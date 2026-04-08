@@ -132,6 +132,10 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> AEConf
     early_stopping_patience   = int(_get("training",   "early_stopping_patience",  0))
     min_epochs_for_best       = int(_get("training",   "min_epochs_for_best",       200))
     warmup_epochs             = int(_get("training",   "warmup_epochs",             200))
+    lr_scheduler          = str(_get("training",   "lr_scheduler",          "none"))
+    lr_scheduler_patience = int(_get("training",   "lr_scheduler_patience", 20))
+    lr_scheduler_factor   = float(_get("training", "lr_scheduler_factor",   0.5))
+    lr_min                = float(_get("training", "lr_min",                 1e-6))
 
     # ---- reconstruction ----
     save_recon       = bool(_get("reconstruction", "save_recon",       True))
@@ -173,6 +177,10 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> AEConf
         early_stopping_patience=early_stopping_patience,
         min_epochs_for_best=min_epochs_for_best,
         warmup_epochs=warmup_epochs,
+        lr_scheduler=lr_scheduler,
+        lr_scheduler_patience=lr_scheduler_patience,
+        lr_scheduler_factor=lr_scheduler_factor,
+        lr_min=lr_min,
         save_recon=save_recon,
         recon_pad_size=recon_pad_size,
         recon_image_size=recon_image_size,

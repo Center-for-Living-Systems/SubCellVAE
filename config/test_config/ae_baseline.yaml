@@ -5,15 +5,15 @@
 root_folder : "/home/lding/lding/fa_data_analysis"
 data:
   patch_dirs:
-    - path           : root_folder + "/ae_results/pax_ch_patch/patch_control"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_control_cell_minmax"
       condition      : 0
       condition_name : "control"
-    - path           : root_folder + "/ae_results/pax_ch_patch/patch_ycomp"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_ycomp_cell_minmax"
       condition      : 1
       condition_name : "ycomp"
 
 output:
-  result_dir : root_folder + "/ae_results/test_run/baseline"
+  result_dir : root_folder + "/ae_results/test_run_cell_minmax/baseline"
 
 model:
   model_type   : "ae"
@@ -24,12 +24,14 @@ model:
   dropout_flag : false
 
 training:
-  epochs         : 500
-  lr             : 0.001
-  batch_size     : 128
-  val_split      : 0.2
-  loss_norm_flag : false
-  group_split    : true
+  epochs                : 500
+  lr                    : 0.001
+  batch_size            : 128
+  val_split             : 0.2
+  loss_norm_flag        : false
+  group_split           : true
+  lr_scheduler          : "cosine"
+  lr_min                : 1e-5
 
 reconstruction:
   save_recon      : true

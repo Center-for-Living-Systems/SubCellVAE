@@ -162,7 +162,7 @@ class PipelineConfig:
             self.cell_mask_folder = Path(self.cell_mask_folder)
 
         # validate norm_mode
-        _valid_norm_modes = {None, "dataset", "image", "cell_insideoutside"}
+        _valid_norm_modes = {None, "dataset", "image", "cell_insideoutside", "cell_minmax"}
         if self.norm_mode not in _valid_norm_modes:
             raise ValueError(
                 f"norm_mode must be one of {_valid_norm_modes}, got {self.norm_mode!r}"
@@ -475,6 +475,7 @@ def run_pipeline(cfg: PipelineConfig) -> pd.DataFrame:
         norm_stats = patch_prep.compute_dataset_norm_stats(
             norm_folder,
             norm_files,
+            rolling_ball_radius=cfg.rolling_ball_radius,
             channels=cfg.norm_channels,
             lo=cfg.norm_lo,
             hi=cfg.norm_hi,

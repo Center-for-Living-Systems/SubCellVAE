@@ -5,15 +5,15 @@
 root_folder : "/home/lding/lding/fa_data_analysis"
 data:
   patch_dirs:
-    - path           : root_folder + "/ae_results/pax_ch_patch/patch_control"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_control_cell_minmax"
       condition      : 0
       condition_name : "control"
-    - path           : root_folder + "/ae_results/pax_ch_patch/patch_ycomp"
+    - path           : root_folder + "/ae_results/pax_ch_patch/patch_ycomp_cell_minmax"
       condition      : 1
       condition_name : "ycomp"
 
 output:
-  result_dir : root_folder + "/ae_results/test_run/semisup_both"
+  result_dir : root_folder + "/ae_results/test_run_cell_minmax/semisup_both"
 
 model:
   model_type   : "semisup"
@@ -41,6 +41,8 @@ training:
   early_stopping_patience : 0       # disabled – run all 500 epochs
   min_epochs_for_best     : 200     # only save best checkpoint after epoch 200
   warmup_epochs           : 200     # recon-only phase before adding cls loss (0 = disabled)
+  lr_scheduler            : "cosine"
+  lr_min                  : 1e-5
 
 annotation:
   annotation_file : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"

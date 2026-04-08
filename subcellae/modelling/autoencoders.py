@@ -206,7 +206,7 @@ class AE(nn.Module):
             nn.ConvTranspose2d(64, 32,    3, stride=2, padding=1, output_padding=1),
             maybe_bn(32), nn.LeakyReLU(0.01),
             nn.ConvTranspose2d(32, no_ch, 3, stride=2, padding=1, output_padding=1),
-            nn.Sigmoid(),
+            nn.Hardtanh(0.0, 1.0),  # clamps to [0,1]; avoids sigmoid saturation on sparse patches
         )
 
         self.final_size = final_size
@@ -223,11 +223,43 @@ class AE(nn.Module):
         return self.decode(z), z
 
 
+# ---------------------------------------------------------------------------
+# LR scheduler helpers (shared by train_ae, train_vae, etc.)
+# ---------------------------------------------------------------------------
+
+def _make_scheduler(optimizer, mode, epochs, patience, factor, lr_min):
+    """Return a scheduler instance or None when mode is 'none'."""
+    if mode == "plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=factor, patience=patience, min_lr=lr_min,
+        )
+    if mode == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=epochs, eta_min=lr_min,
+        )
+    return None  # "none"
+
+
+def _step_scheduler(scheduler, mode, val_loss):
+    """Step the scheduler; plateau needs the metric, cosine does not."""
+    if scheduler is None:
+        return
+    if mode == "plateau":
+        scheduler.step(val_loss)
+    else:
+        scheduler.step()
+
+
 def train_ae(model, train_loader, val_loader, device, epochs, lr,
-             loss_norm_flag, result_dir):
+             loss_norm_flag, result_dir,
+             lr_scheduler="none", lr_scheduler_patience=20,
+             lr_scheduler_factor=0.5, lr_min=1e-6):
     """Training loop for the standard AE."""
     optimizer = optim.Adam(model.parameters(), lr=lr)
     loss_fn = normalized_mse if loss_norm_flag else nn.MSELoss()
+
+    scheduler = _make_scheduler(optimizer, lr_scheduler, epochs,
+                                lr_scheduler_patience, lr_scheduler_factor, lr_min)
 
     train_losses, val_losses = [], []
     error_print_period = max(1, epochs // 50)
@@ -255,8 +287,11 @@ def train_ae(model, train_loader, val_loader, device, epochs, lr,
         v_loss /= len(val_loader)
         val_losses.append(v_loss)
 
+        _step_scheduler(scheduler, lr_scheduler, v_loss)
+
         if (epoch + 1) % error_print_period == 0:
-            print(f"AE  epoch {epoch+1}/{epochs}  train={t_loss:.4f}  val={v_loss:.4f}")
+            current_lr = optimizer.param_groups[0]["lr"]
+            print(f"AE  epoch {epoch+1}/{epochs}  train={t_loss:.4f}  val={v_loss:.4f}  lr={current_lr:.2e}")
 
         if (epoch + 1) % recon_view_period == 0:
             fig = plot_reconstruction_progress(model, val_loader, device, epoch + 1)
@@ -386,6 +421,8 @@ def train_vae(
     recon_type,
     result_dir,
     beta_anneal: bool = False,   # linearly warm up beta from 0 → beta
+    lr_scheduler="none", lr_scheduler_patience=20,
+    lr_scheduler_factor=0.5, lr_min=1e-6,
 ):
     """
     Training loop for VAE32 (standard VAE or beta-VAE).
@@ -397,6 +434,8 @@ def train_vae(
                   Helps avoid posterior collapse.
     """
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = _make_scheduler(optimizer, lr_scheduler, epochs,
+                                lr_scheduler_patience, lr_scheduler_factor, lr_min)
 
     train_losses, val_losses = [], []
     train_recon, train_kl    = [], []
@@ -441,11 +480,14 @@ def train_vae(
         vl /= n; vr /= n; vk /= n
         val_losses.append(vl); val_recon.append(vr); val_kl.append(vk)
 
+        _step_scheduler(scheduler, lr_scheduler, vl)
+
         if (epoch + 1) % error_print_period == 0:
+            current_lr = optimizer.param_groups[0]["lr"]
             print(
                 f"VAE  epoch {epoch+1}/{epochs}  β={current_beta:.2f} | "
                 f"train total={tl:.4f} recon={tr:.4f} kl={tk:.4f} | "
-                f"val   total={vl:.4f} recon={vr:.4f} kl={vk:.4f}"
+                f"val   total={vl:.4f} recon={vr:.4f} kl={vk:.4f}  lr={current_lr:.2e}"
             )
 
         if (epoch + 1) % recon_view_period == 0:
@@ -551,7 +593,7 @@ class SemiSupAE(nn.Module):
             nn.ConvTranspose2d(64, 32,    3, stride=2, padding=1, output_padding=1),
             maybe_bn(32), nn.LeakyReLU(0.01),
             nn.ConvTranspose2d(32, no_ch, 3, stride=2, padding=1, output_padding=1),
-            nn.Sigmoid(),
+            nn.Hardtanh(0.0, 1.0),  # clamps to [0,1]; avoids sigmoid saturation on sparse patches
         )
 
         # ---------- classification head (primary) ----------
@@ -978,7 +1020,7 @@ class ContrastiveAE(nn.Module):
             nn.ConvTranspose2d(64, 32,    3, stride=2, padding=1, output_padding=1),
             maybe_bn(32), nn.LeakyReLU(0.01),
             nn.ConvTranspose2d(32, no_ch, 3, stride=2, padding=1, output_padding=1),
-            nn.Sigmoid(),
+            nn.Hardtanh(0.0, 1.0),  # clamps to [0,1]; avoids sigmoid saturation on sparse patches
         )
 
         # ---------- projection head (for contrastive loss only) ----------

@@ -73,7 +73,7 @@ from skimage.restoration import rolling_ball
 # {channel_index: (p1_value, p99_value)}
 NormStats = Dict[int, Tuple[float, float]]
 
-NormMode = Optional[Literal["dataset", "image"]]
+NormMode = Optional[Literal["dataset", "image", "cell_insideoutside", "cell_minmax"]]
 
 FileType = Literal["czi", "npy"]
 
@@ -261,12 +261,17 @@ def compute_dataset_norm_stats(
     lo: float = 1.0,
     hi: float = 99.0,
     file_type: FileType = "czi",
+    rolling_ball_radius: Optional[float] = None,
 ) -> NormStats:
     """Compute per-channel percentile bounds over the **whole dataset**.
 
     Loads every file listed in *filenames*, reads the requested *channels*,
     pools all pixel values per channel, then returns the ``lo``/``hi``
     percentile pair for each channel.
+
+    If *rolling_ball_radius* is set, rolling-ball background subtraction is
+    applied to each channel before pooling pixels, so the percentiles are
+    computed on the same signal that will be normalised during patch extraction.
 
     Parameters
     ----------
@@ -283,6 +288,9 @@ def compute_dataset_norm_stats(
     file_type:
         ``"czi"`` – load via *czifile*; values divided by ``255 × 255``.
         ``"npy"`` – load via ``np.load``; values used as-is.
+    rolling_ball_radius:
+        If provided, apply rolling-ball subtraction to each channel before
+        computing percentiles. Must match the value used during patch extraction.
 
     Returns
     -------
@@ -295,6 +303,8 @@ def compute_dataset_norm_stats(
         raw = _load_raw_squeezed(image_folder, filename, file_type)
         for ch in channels:
             ch_data = _extract_channel(raw, ch, filename, file_type)
+            if rolling_ball_radius is not None:
+                ch_data = apply_rolling_ball(ch_data, radius=rolling_ball_radius)
             pixel_pools[ch].append(ch_data.ravel())
 
     norm_stats: NormStats = {}
@@ -362,7 +372,8 @@ def normalize_image(
         return _percentile_stretch(img, p1, p99)
 
     raise ValueError(
-        f"Unknown norm_mode {norm_mode!r}. Choose 'dataset', 'image', or None."
+        f"Unknown norm_mode {norm_mode!r}. "
+        f"Choose 'dataset', 'image', 'cell_insideoutside', 'cell_minmax', or None."
     )
 
 
@@ -539,6 +550,52 @@ def normalize_cell_insideoutside(
     return int1 / (mean_inside * scale)
 
 
+def normalize_cell_minmax(
+    img: np.ndarray,
+    seg: np.ndarray,
+) -> np.ndarray:
+    """Normalize using mean background subtraction, cell mean division, then max stretch.
+
+    Steps
+    -----
+    1. ``int1 = img - mean(pixels where seg == 0)``   — subtract background mean
+    2. ``int2 = int1 / mean(int1 where seg > 0)``     — scale by mean in-cell signal
+    3. Return ``int2 / int2.max()``                   — stretch to [0, 1]
+
+    Matches the preprocessing notebook (Alana): ``img_pp = (img_RB - avg_BG) / avg_cell``
+    followed by ``img_pp_norm = img_pp / img_pp.max()``.
+
+    Parameters
+    ----------
+    img:
+        2-D float image (unpadded, same shape as *seg*).
+    seg:
+        2-D segmentation mask (unpadded). Zero = outside cell, nonzero = inside.
+
+    Returns
+    -------
+    np.ndarray
+        Normalised image clipped to [0, 1] with max value = 1.
+    """
+    outside = seg == 0
+    inside  = seg > 0
+
+    bg = float(np.mean(img[outside])) if outside.any() else 0.0
+    int1 = img - bg
+
+    # Normalise by the 99th percentile of in-cell signal so that the typical
+    # bright FA maps to ~1 rather than the single hottest pixel driving
+    # everything else into the dim end of [0, 1].
+    if inside.any():
+        scale = float(np.percentile(int1[inside], 99))
+    else:
+        scale = float(int1.max())
+    if scale <= 0.0:
+        scale = 1.0
+
+    return np.clip(int1 / scale, 0.0, 1.0)
+
+
 # ---------------------------------------------------------------------------
 # Rolling-ball background subtraction
 # ---------------------------------------------------------------------------
@@ -561,10 +618,12 @@ def apply_rolling_ball(img: np.ndarray, radius: float) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Background-subtracted image clipped to ``[0, 1]``.
+        Background-subtracted image. Negative values (over-subtracted background)
+        are left as-is so that downstream normalization (e.g. percentile stretch)
+        can map the full range naturally without introducing exact zeros.
     """
     background = rolling_ball(img, radius=radius)
-    return np.clip(img - background, 0, None)
+    return img - background
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +737,8 @@ def load_and_pad(
     # --- normalization (applied to image channel only) ---
     if norm_mode == "cell_insideoutside":
         img = normalize_cell_insideoutside(img, seg, scale=norm_cell_scale)
+    elif norm_mode == "cell_minmax":
+        img = normalize_cell_minmax(img, seg)
     else:
         img = normalize_image(
             img,

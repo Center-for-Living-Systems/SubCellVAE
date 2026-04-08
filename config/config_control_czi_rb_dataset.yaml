@@ -1,0 +1,83 @@
+# =============================================================================
+# Patch-prep pipeline configuration
+# File type  : .czi
+# Norm mode  : rolling ball (r=10) + dataset  (per-set 0.2 %–99.8 % percentile stretch)
+# Seg mode   : auto (file mask – cell_mask_folder is non-empty)
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+  root_folder       : "/home/lding/lding/fa_data_analysis"   # change ONLY this when switching computers
+  image_folder      : root_folder + "/fa_data/031125data/Control"
+  cell_mask_folder  : root_folder + "/fa_cellseg/031125analysis/control/code_org_20250820_seg/mask"
+  patch_output_dir  : root_folder + "/ae_results/pax_ch_patch/patch_control_rb_dataset"
+  plot_output_dir   : root_folder + "/ae_results/pax_ch_patch/plot_control_rb_dataset"
+
+# ---------------------------------------------------------------------------
+# Experiment identity
+# ---------------------------------------------------------------------------
+experiment:
+  condition : "czi_rb_dataset"   # label used in CSV filenames and log output
+  major_ch  : 1                  # channel index to extract for the image patch (0-based)
+
+# ---------------------------------------------------------------------------
+# Input file type
+# ---------------------------------------------------------------------------
+input:
+  file_type : "czi"
+  start_ind : 0      # first file index to process (inclusive)
+  end_ind   : 999    # last file index to process (exclusive); set to actual file count
+
+# ---------------------------------------------------------------------------
+# Patch geometry
+# ---------------------------------------------------------------------------
+patch:
+  patch_size   : 32         # side length (px) of the final square patch
+  mask_ratio   : 0.4        # minimum mean mask coverage to keep a patch
+  pad_size     : 64         # constant padding added to each image edge before gridding
+  patch_prefix : "control"  # prepended to patch filenames; leave empty ("") to disable
+
+# ---------------------------------------------------------------------------
+# Preprocessing  –  rolling ball background subtraction (Alana radius=10)
+# ---------------------------------------------------------------------------
+preprocessing:
+  rolling_ball_radius : 10   # applied before normalization; set to null to disable
+
+# ---------------------------------------------------------------------------
+# Normalization  –  per-dataset 0.2 %–99.8 % percentile stretch
+# ---------------------------------------------------------------------------
+normalization:
+  norm_mode     : "dataset"   # null | "image" | "dataset" | "cell_insideoutside" | "cell_minmax"
+  norm_channels : [1]         # channels to include in dataset-level stat computation
+  norm_lo       : 0.2         # lower percentile bound
+  norm_hi       : 99.8        # upper percentile bound
+
+# ---------------------------------------------------------------------------
+# Segmentation  –  parameters for on-the-fly fallback (ignored when file mask is used)
+# ---------------------------------------------------------------------------
+segmentation:
+  seg_ch               : 3
+  seg_threshold        : 0.2
+  seg_close_size       : 5
+  seg_min_size_initial : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final   : 30000
+
+# ---------------------------------------------------------------------------
+# Augmentation  –  all off for a clean grid-only run
+# ---------------------------------------------------------------------------
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+misc:
+  dpi       : 256
+  debug     : false
+  log_level : "INFO"
