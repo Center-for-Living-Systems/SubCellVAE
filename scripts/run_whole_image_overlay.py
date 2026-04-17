@@ -68,12 +68,22 @@ _FALLBACK_COLORS = matplotlib.colormaps["tab10"].colors   # up to 10 classes
 # Coordinate parsing
 # ---------------------------------------------------------------------------
 
-_FNAME_RE = re.compile(r'^(f\d+)x(\d+)y(\d+)ps(\d+)\.tif$', re.IGNORECASE)
+# Matches filenames like:
+#   control_f1x300y400ps32          (stem only, with prefix)
+#   ycomp_f0002x128y256ps32.tif     (with extension)
+#   f0001x300y400ps32.tif           (no prefix, legacy)
+_FNAME_RE = re.compile(r'(.+_f\d+|f\d+)x(\d+)y(\d+)ps(\d+)', re.IGNORECASE)
 
 
 def _parse_coords(filename: str):
-    """Return (img_id, x, y, ps) parsed from patch filename, or None."""
-    m = _FNAME_RE.match(filename)
+    """Return (img_id, x, y, ps) parsed from patch filename stem, or None.
+
+    img_id is the portion before 'x{x}y{y}ps{ps}', e.g. 'control_f1'.
+    It is used as the source-image grouping key.
+    """
+    # Use the stem (strip directory and .tif extension if present)
+    stem = Path(filename).stem
+    m = _FNAME_RE.match(stem)
     if m:
         return m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
     return None
@@ -137,6 +147,9 @@ def _build_overlay(
     groups = df.groupby(["condition_name", "img_id"])
     log.info("  Generating overlays for %d images …", len(groups))
 
+    vis_stack: list = []
+    vis_index: list = []
+
     for (cond, img_id), sub in groups:
         canvas = np.zeros((image_size, image_size), dtype=np.float32)
 
@@ -151,19 +164,16 @@ def _build_overlay(
             y0 = int(row["y"]) - pad_size
             x1 = x0 + ps
             y1 = y0 + ps
-            # Clip to canvas bounds
             x0c, x1c = max(0, x0), min(image_size, x1)
             y0c, y1c = max(0, y0), min(image_size, y1)
             if x0c >= x1c or y0c >= y1c:
                 continue
             px0, py0 = x0c - x0, y0c - y0
-            patch_h, patch_w = patch.shape[-2], patch.shape[-1]
             if patch.ndim == 2:
                 canvas[y0c:y1c, x0c:x1c] = patch[py0:py0+(y1c-y0c), px0:px0+(x1c-x0c)]
             else:
                 canvas[y0c:y1c, x0c:x1c] = patch[0, py0:py0+(y1c-y0c), px0:px0+(x1c-x0c)]
 
-        # Normalise canvas to [0, 1] for display
         cmax = canvas.max()
         if cmax > 0:
             canvas /= cmax
@@ -186,7 +196,6 @@ def _build_overlay(
             )
             ax.add_patch(rect)
 
-        # --- legend ---
         legend_handles = []
         if label_order:
             for lbl in label_order:
@@ -198,10 +207,22 @@ def _build_overlay(
                       framealpha=0.7, handlelength=1.2)
 
         fig.tight_layout(pad=0.5)
-        out_name = f"overlay_{cond}_{img_id}.png"
-        fig.savefig(out_dir / out_name, dpi=dpi)
+        fig.canvas.draw()
+        w, h = fig.canvas.get_width_height()
+        arr = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+        arr = arr.reshape(h, w, 4)[:, :, :3]  # RGBA → RGB
         plt.close(fig)
-        log.info("    saved %s", out_name)
+
+        vis_index.append({"frame": len(vis_stack), "condition": cond, "img_id": img_id})
+        vis_stack.append(arr)
+        log.info("    rendered %s | %s", cond, img_id)
+
+    # ---- Write stacked TIFF + companion CSV --------------------------------
+    if vis_stack:
+        tiff.imwrite(str(out_dir / "overlay.tif"),
+                     np.stack(vis_stack, axis=0), imagej=True)
+        pd.DataFrame(vis_index).to_csv(out_dir / "overlay_index.csv", index=False)
+        log.info("  Saved overlay stack (%d frames) → %s", len(vis_stack), out_dir)
 
 
 # ---------------------------------------------------------------------------

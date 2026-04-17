@@ -1,0 +1,26 @@
+# Overlay: FA type | semisup_pos | lat8 | dataset: vinc
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  predictions_csv : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/semisup_pos/vinc/fa_cls_lat8/predictions_all.csv"
+output:
+  out_dir : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/semisup_pos/vinc/fa_cls_lat8/overlay"
+labels:
+  label_order:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+  colors:
+    - "#e6194b"
+    - "#f58231"
+    - "#3cb44b"
+    - "#4363d8"
+    - "#aaaaaa"
+misc:
+  pad_size     : 64
+  image_size   : 1024
+  linewidth    : 0.6
+  dpi          : 300
+  title_prefix : "FA type | semisup_pos | lat8 | vinc"
+  log_level    : "INFO"

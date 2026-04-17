@@ -1,0 +1,40 @@
+# =============================================================================
+# Analysis: AE: semisup_fa
+# Results: results/test_run/semisup_fa/analysis/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  latents_csv  : root_folder + "/ae_results/test_run_cio/semisup_fa/latents.csv"
+  split_filter : "all"
+
+output:
+  out_dir : root_folder + "/ae_results/test_run_cio/semisup_fa/analysis"
+
+embedding:
+  methods:
+    - UMAP
+  umap_n_neighbors  : 15
+  umap_min_dist     : 0.1
+  umap_random_state : 42
+
+clustering:
+  kmeans_enabled    : true
+  kmeans_n_clusters : 5
+  dbscan_enabled    : false
+  dbscan_eps        : 0.5
+  dbscan_min_samples: 10
+  boxplot_kind      : box
+
+label_orders:
+  annotation_label_name:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+  condition_name:
+    - "control"
+    - "ycomp"
+
+misc:
+  log_level : "INFO"

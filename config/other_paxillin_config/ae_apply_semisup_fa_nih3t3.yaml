@@ -1,0 +1,28 @@
+# AE Apply: semisup_fa | dataset: nih3t3
+root_folder : "/home/lding/lding/fa_data_analysis"
+model:
+  model_pt : "/home/lding/lding/fa_data_analysis/ae_results/test_run_overfit_20260322/semisup_fa/model_final.pt"
+
+data:
+  patch_dirs:
+    - path          : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/patches/nih3t3/control/tiff_patches32"
+      condition     : 0
+      condition_name: "control"
+    - path          : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/patches/nih3t3/ycomp/tiff_patches32"
+      condition     : 1
+      condition_name: "ycomp"
+
+output:
+  out_dir : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/semisup_fa/nih3t3"
+
+inference:
+  batch_size : 128
+
+reconstruction:
+  save_recon       : true
+  recon_pad_size   : 64
+  recon_image_size : 1024
+
+misc:
+  device    : "auto"
+  log_level : "INFO"

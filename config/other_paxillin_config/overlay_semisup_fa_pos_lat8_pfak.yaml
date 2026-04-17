@@ -1,0 +1,24 @@
+# Overlay: Position | semisup_fa | lat8 | dataset: pfak
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  predictions_csv : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/semisup_fa/pfak/pos_cls_lat8/predictions_all.csv"
+output:
+  out_dir : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/semisup_fa/pfak/pos_cls_lat8/overlay"
+labels:
+  label_order:
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+  colors:
+    - "#e6194b"
+    - "#f58231"
+    - "#3cb44b"
+    - "#4363d8"
+misc:
+  pad_size     : 64
+  image_size   : 1024
+  linewidth    : 0.6
+  dpi          : 300
+  title_prefix : "Position | semisup_fa | lat8 | pfak"
+  log_level    : "INFO"

@@ -1,0 +1,27 @@
+# Analysis: semisup_both | dataset: pfak
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  latents_csv  : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/semisup_both/pfak/latents_newdata.csv"
+  split_filter : "all"
+
+output:
+  out_dir : "/home/lding/lding/fa_data_analysis/ae_results/other_paxillin/semisup_both/pfak/analysis"
+
+embedding:
+  methods:
+    - UMAP
+  umap_model_pkl : "/home/lding/lding/fa_data_analysis/ae_results/test_run_overfit_20260322/semisup_both/fa_cls_lat8/umap_all_model.pkl"
+
+clustering:
+  kmeans_enabled    : true
+  kmeans_n_clusters : 5
+  dbscan_enabled    : false
+  boxplot_kind      : box
+
+label_orders:
+  condition_name:
+    - "control"
+    - "ycomp"
+
+misc:
+  log_level : "INFO"

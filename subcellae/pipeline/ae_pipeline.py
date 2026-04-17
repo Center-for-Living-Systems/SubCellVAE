@@ -483,6 +483,7 @@ def _save_reconstructions(
     train_result: dict,
     val_result: dict,
     cfg: "AEConfig",
+    datasets: list | None = None,
 ) -> None:
     """Save per-patch and whole-image reconstruction outputs.
 
@@ -510,12 +511,13 @@ def _save_reconstructions(
     cfg : AEConfig
         Pipeline configuration; uses ``result_dir`` and ``recon_pad_size``.
     """
-    recon_dir   = cfg.result_dir / "recon"
-    patch_dir   = recon_dir / "patches"
-    image_dir   = recon_dir / "images"
-    visual_dir  = recon_dir / "visual"
-    for d in (patch_dir, image_dir, visual_dir):
-        d.mkdir(parents=True, exist_ok=True)
+    recon_dir = cfg.result_dir / "recon"
+    recon_dir.mkdir(parents=True, exist_ok=True)
+
+    cond_to_name: dict = {}
+    if datasets:
+        for ds in datasets:
+            cond_to_name[ds.condition] = ds.condition_name
 
     pad = cfg.recon_pad_size
 
@@ -527,9 +529,16 @@ def _save_reconstructions(
         """Return 2-D (H, W) slice for channel *ch* from a (C,H,W) or (H,W) array."""
         return arr[ch] if arr.ndim == 3 else arr
 
-    # ---- 1. save individual patch tifs and collect canvas info ----
+    # ---- 1. collect patches into lists, build canvas info ----
+    # Patches are written as stacked TIFFs + a companion CSV:
+    #   recon/patches_raw.tif   — (N, [C,] H, W) stack
+    #   recon/patches_recon.tif — (N, [C,] H, W) stack
+    #   recon/patches_index.csv — frame, split, condition, condition_name, group, name
     # canvas_data[group][split] = list of (y0, y1, x0, x1, raw, recon)
     canvas_data: dict = defaultdict(lambda: defaultdict(list))
+    stack_raw:   list = []
+    stack_recon: list = []
+    stack_index: list = []   # rows for the CSV
 
     for split_name, result in [("train", train_result), ("val", val_result)]:
         for i, path in enumerate(result["paths"]):
@@ -537,9 +546,19 @@ def _save_reconstructions(
             raw_p   = result["raws"][i]
             recon_p = result["recons"][i]
 
-            # save individual patch tifs (multi-channel saved as (C,H,W) tif)
-            tifffile.imwrite(str(patch_dir / f"raw_{split_name}_{fname}"),   raw_p)
-            tifffile.imwrite(str(patch_dir / f"recon_{split_name}_{fname}"), recon_p)
+            condition      = result["conditions"][i]
+            condition_name = cond_to_name.get(condition, str(condition))
+            group          = _extract_group_key(path)
+            stack_index.append({
+                "frame":          len(stack_raw),
+                "split":          split_name,
+                "condition":      condition,
+                "condition_name": condition_name,
+                "group":          group,
+                "name":           Path(fname).stem,
+            })
+            stack_raw.append(raw_p)
+            stack_recon.append(recon_p)
 
             # parse coordinates for whole-image canvas
             coords = _parse_patch_coords(fname)
@@ -561,9 +580,32 @@ def _save_reconstructions(
 
             canvas_data[group][split_name].append((r0, r1, c0, c1, raw_p, recon_p))
 
-    # ---- 2. build and save whole-image canvases per group ----
+    # ---- 2. write stacked patch TIFFs + companion CSV ----
+    if stack_raw:
+        raw_stack   = np.stack(stack_raw,   axis=0)   # (N, [C,] H, W)
+        recon_stack = np.stack(stack_recon, axis=0)
+        tifffile.imwrite(str(recon_dir / "patches_raw.tif"),   raw_stack,   imagej=True)
+        tifffile.imwrite(str(recon_dir / "patches_recon.tif"), recon_stack, imagej=True)
+        idx_df = pd.DataFrame(stack_index)
+        idx_df.to_csv(recon_dir / "patches_index.csv", index=False)
+        log.info("Saved patch stacks (%d frames) → %s", len(stack_raw), recon_dir)
+
+    # ---- 3. build whole-image canvases and visual comparisons per group ----
+    # All outputs are stacked TIFFs + companion CSVs (no subdirectories):
+    #   recon/images_raw.tif    — (N, H, W) stack, one frame per (group, channel)
+    #   recon/images_recon.tif  — same
+    #   recon/images_index.csv  — frame, group, channel
+    #   recon/visual.tif        — (N, H, W, 3) uint8 stack, one frame per group
+    #   recon/visual_index.csv  — frame, group
     img_size = cfg.recon_image_size
     all_groups = sorted(set(canvas_data.keys()))
+
+    img_stack_raw:   list = []
+    img_stack_recon: list = []
+    img_stack_index: list = []
+    vis_stack:       list = []
+    vis_index:       list = []
+
     for group in all_groups:
         split_entries = canvas_data[group]
         all_entries = [(r0, r1, c0, c1, raw_p, recon_p, sp)
@@ -586,20 +628,18 @@ def _save_reconstructions(
                 r1 = min(r1, img_size)
                 c1 = min(c1, img_size)
             for ch in range(n_ch):
-                raw_canvases[ch][r0:r1, c0:c1]   = _get_ch(raw_p,   ch)[:r1-r0, :c1-c0]
-                recon_canvases[ch][r0:r1, c0:c1]  = _get_ch(recon_p, ch)[:r1-r0, :c1-c0]
+                raw_canvases[ch][r0:r1, c0:c1]  = _get_ch(raw_p,   ch)[:r1-r0, :c1-c0]
+                recon_canvases[ch][r0:r1, c0:c1] = _get_ch(recon_p, ch)[:r1-r0, :c1-c0]
 
+        # collect canvas frames
         for ch in range(n_ch):
-            ch_suffix = f"_ch{ch}" if n_ch > 1 else ""
-            tifffile.imwrite(str(image_dir / f"raw{ch_suffix}_{group}.tif"),   raw_canvases[ch])
-            tifffile.imwrite(str(image_dir / f"recon{ch_suffix}_{group}.tif"), recon_canvases[ch])
+            img_stack_index.append({"frame": len(img_stack_raw), "group": group, "channel": ch})
+            img_stack_raw.append(raw_canvases[ch])
+            img_stack_recon.append(recon_canvases[ch])
 
-        # determine split label for the suptitle (train / val / train+val)
+        # render side-by-side comparison → numpy RGB array
         splits_present = sorted(split_entries.keys())
-        split_label = "+".join(splits_present)
-        suptitle = f"{group}  [{split_label}]"
-
-        # ---- 3. side-by-side PNG comparison (one row per channel) ----
+        suptitle = f"{group}  [{'+'.join(splits_present)}]"
         fig, axes = plt.subplots(n_ch, 2, figsize=(10, 5 * n_ch), squeeze=False)
         fig.suptitle(suptitle, fontsize=13, fontweight="bold")
         for ch in range(n_ch):
@@ -611,8 +651,28 @@ def _save_reconstructions(
             axes[ch, 1].set_title(f"Reconstruction{ch_label}")
             axes[ch, 1].axis("off")
         fig.tight_layout()
-        fig.savefig(str(visual_dir / f"{group}_comparison.png"), dpi=150)
+        fig.canvas.draw()
+        vis_w, vis_h = fig.canvas.get_width_height()
+        vis_arr = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+        vis_arr = vis_arr.reshape(vis_h, vis_w, 4)[:, :, :3]  # RGBA → RGB
         plt.close(fig)
+        vis_index.append({"frame": len(vis_stack), "group": group})
+        vis_stack.append(vis_arr)
+
+    # ---- 4. write image and visual stacked TIFFs + CSVs ----
+    if img_stack_raw:
+        tifffile.imwrite(str(recon_dir / "images_raw.tif"),
+                         np.stack(img_stack_raw,   axis=0), imagej=True)
+        tifffile.imwrite(str(recon_dir / "images_recon.tif"),
+                         np.stack(img_stack_recon, axis=0), imagej=True)
+        pd.DataFrame(img_stack_index).to_csv(recon_dir / "images_index.csv", index=False)
+        log.info("Saved image canvas stacks (%d frames) → %s", len(img_stack_raw), recon_dir)
+
+    if vis_stack:
+        tifffile.imwrite(str(recon_dir / "visual.tif"),
+                         np.stack(vis_stack, axis=0), imagej=True)
+        pd.DataFrame(vis_index).to_csv(recon_dir / "visual_index.csv", index=False)
+        log.info("Saved visual comparison stack (%d frames) → %s", len(vis_stack), recon_dir)
 
     log.info("Reconstruction output saved → %s  (%d source images)",
              recon_dir, len(all_groups))
@@ -952,7 +1012,7 @@ def run_ae_pipeline(cfg: AEConfig):
     # ------------------------------------------------------------------
     if cfg.save_recon:
         log.info("Saving reconstruction images …")
-        _save_reconstructions(train_result, val_result, cfg)
+        _save_reconstructions(train_result, val_result, cfg, datasets=datasets)
 
     log.info("Pipeline complete.")
     return model

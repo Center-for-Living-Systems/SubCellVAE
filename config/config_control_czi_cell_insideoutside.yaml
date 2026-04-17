@@ -1,0 +1,80 @@
+# =============================================================================
+# Patch-prep pipeline configuration
+# File type  : .czi
+# Norm mode  : cell_insideoutside  (median BG sub → cell mean div → fixed scale)
+# Seg mode   : auto (file mask – cell_mask_folder is non-empty)
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Paths  (forward slashes work on both Windows and WSL/Linux)
+# ---------------------------------------------------------------------------
+paths:
+  root_folder       : "/home/lding/lding/fa_data_analysis"   # change ONLY this when switching computers
+  image_folder      : root_folder + "/fa_data/031125data/Control"
+  cell_mask_folder  : root_folder + "/fa_cellseg/031125analysis/control/code_org_20250820_seg/mask"
+  patch_output_dir  : root_folder + "/ae_results/pax_ch_patch/patch_control_cell_insideoutside"
+  plot_output_dir   : root_folder + "/ae_results/pax_ch_patch/plot_control_cell_insideoutside"
+
+# ---------------------------------------------------------------------------
+# Experiment identity
+# ---------------------------------------------------------------------------
+experiment:
+  condition : "czi_cell_insideoutside"
+  major_ch  : 1
+
+# ---------------------------------------------------------------------------
+# Input file type
+# ---------------------------------------------------------------------------
+input:
+  file_type : "czi"
+  start_ind : 0
+  end_ind   : 999
+
+# ---------------------------------------------------------------------------
+# Patch geometry
+# ---------------------------------------------------------------------------
+patch:
+  patch_size   : 32
+  mask_ratio   : 0.4
+  pad_size     : 64
+  patch_prefix : "control"
+
+# ---------------------------------------------------------------------------
+# Preprocessing
+# ---------------------------------------------------------------------------
+preprocessing:
+  rolling_ball_radius : 10   # set to 10 to enable rolling ball before normalization
+
+# ---------------------------------------------------------------------------
+# Normalization  –  median BG subtraction → cell mean division → fixed scale
+# ---------------------------------------------------------------------------
+normalization:
+  norm_mode : "cell_insideoutside"   # null | "image" | "dataset" | "cell_insideoutside" | "cell_minmax"
+
+# ---------------------------------------------------------------------------
+# Segmentation
+# ---------------------------------------------------------------------------
+segmentation:
+  seg_ch               : 3
+  seg_threshold        : 0.2
+  seg_close_size       : 5
+  seg_min_size_initial : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final   : 30000
+
+# ---------------------------------------------------------------------------
+# Augmentation  –  all off for a clean grid-only run
+# ---------------------------------------------------------------------------
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+misc:
+  dpi       : 256
+  debug     : false
+  log_level : "INFO"
