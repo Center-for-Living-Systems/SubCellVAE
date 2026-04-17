@@ -381,42 +381,77 @@ ae_results/other_paxillin/
 
 ## Interactive Patch Viewer
 
-A local browser-based viewer for exploring UMAP embeddings and inspecting individual patches.
+A local browser-based tool (Panel + Bokeh) for exploring UMAP embeddings and inspecting individual patches. Two directions of interaction are supported:
 
 ```
-Left panel  : UMAP scatter plot, colour-coded by FA type or Position prediction.
-               Hovering a dot shows the raw and reconstructed patch inline (no click needed).
-Right top   : Selected patch — raw and reconstructed side-by-side.
-Right bottom: Full paxillin canvas image with a red box at the selected patch location.
+┌──────────────────────────┬────────────────────────────────────┐
+│  [Colour by ▼]           │  [Image selector ▼]                │
+│                          │                                     │
+│  UMAP scatter            │  Full paxillin canvas               │
+│  • hover dot →           │  • coloured patch boxes             │
+│    patch thumbnail       │    (by FA type prediction)          │
+│    appears instantly     │  • click a patch location →         │
+│  • tap dot →             │    nearest patch highlighted        │
+│    detail panel updates  │    with white border;               │
+│    canvas scrolls to     │    large red dot appears on UMAP;   │
+│    source image          │    detail panel updates             │
+│                          │                                     │
+├──────────────────────────┴────────────────────────────────────┤
+│  Patch: control_f0000x0300y0400ps32  ·  Condition: control    │
+│  FA type: focal adhesion  ·  Position: Lamella                 │
+│  [Raw patch image]  [Reconstructed patch image]  [Legend]      │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-**Step 1 — Pack one result directory into a viewer HDF5** (on cluster or locally):
+**Direction A — UMAP → canvas:**
+- Hover any UMAP dot: raw + reconstructed patch appear in a tooltip instantly (client-side, embedded base64 PNG — no server round-trip).
+- Tap a dot: the detail panel updates with patch images and FA/Position prediction text; the canvas panel automatically switches to the source image and highlights the patch with a white border.
+
+**Direction B — Canvas → UMAP:**
+- Select any source image from the dropdown (labelled `condition | group_key`).
+- All patches for that image are drawn as coloured bounding boxes (colour = FA type prediction).
+- Click anywhere on the canvas: the nearest patch is found, a large red dot appears on the UMAP at its embedding location, and the detail panel updates.
+
+The colour legend in the bottom-right lists both FA type and Position palettes for reference.
+
+### Step 1 — Pack a result directory into a viewer HDF5
+
+Run on the cluster (or locally) for each `variant/dataset` result directory:
 
 ```bash
 python scripts/pack_interactive_h5.py \
     ae_results/other_paxillin/baseline/vinc \
     --out ae_results/other_paxillin/baseline/vinc/interactive.h5
 
-# Optional: downscale canvas images to halve the file size
+# Optional: downscale canvas images to halve file size (try 0.5 for large datasets)
 python scripts/pack_interactive_h5.py <result_dir> --image-scale 0.5
 ```
 
+The packer reads:
+- `latents_newdata.csv` — patch metadata, latent coordinates
+- `analysis/analysis_results.csv` — UMAP_1, UMAP_2
+- `fa_cls_lat8/predictions_all.csv` and `pos_cls_lat8/predictions_all.csv` — FA and Position predictions
+- `recon/patches_raw.tif` + `patches_recon.tif` + `patches_index.csv` — patch image stacks
+- `recon/images_raw.tif` + `images_index.csv` — full canvas image stacks
+
 `run_other_paxillin.sh` automatically packs all 16 dataset-variant combinations at the end (Stage 6).
 
-**Step 2 — scp the HDF5 to your local machine**, then:
+> **Old-format fallback:** if the pipeline ran before the stacked-TIFF refactor (producing individual `recon/patches/raw_*.tif` and `recon/images/raw_*.tif` files instead of stacked TIFFs), `pack_interactive_h5.py` will still write a valid HDF5 containing only metadata. The viewer detects this and **lazy-loads patches and canvas images directly from disk** on demand — no re-running the pipeline is required.
+
+### Step 2 — View locally
 
 ```bash
-# Standalone (opens browser automatically)
+# Standalone — opens browser at http://localhost:5006 automatically
 python scripts/view_interactive.py path/to/interactive.h5
 
-# Via panel serve
+# Via panel serve (equivalent)
 panel serve scripts/view_interactive.py --args path/to/interactive.h5 --show
 ```
 
 **Dependencies** (not in base environment; install once):
 
 ```bash
-pip install panel bokeh h5py pillow
+pip install panel bokeh h5py pillow tifffile
 ```
 
 ---
