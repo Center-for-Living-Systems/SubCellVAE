@@ -54,13 +54,14 @@ from bokeh.plotting import figure
 
 pn.extension(sizing_mode='stretch_width')
 
-# ── Shared colour palettes ────────────────────────────────────────────────────
-FA_ORDER   = ["Nascent Adhesion", "focal complex", "focal adhesion",
-              "fibrillar adhesion", "No adhesion"]
-POS_ORDER  = ["Cell Protruding Edge", "Cell Periphery/other", "Lamella", "Cell Body"]
-FA_COLORS  = ["#e6194b", "#f58231", "#3cb44b", "#4363d8", "#aaaaaa"]
-POS_COLORS = ["#e6194b", "#f58231", "#3cb44b", "#4363d8"]
-FALLBACK   = "#cccccc"
+# ── Shared colour palettes (authoritative source: subcellae.utils.label_colors) ──
+from subcellae.utils.label_colors import (
+    classification_label_order as FA_ORDER,
+    classification_label_to_color as FA_COLOR_MAP,
+    position_label_order as POS_ORDER,
+    position_label_to_color as POS_COLOR_MAP,
+)
+FALLBACK = "#cccccc"
 
 # Grayscale palette: index 0 → black, index 255 → white
 try:
@@ -70,17 +71,14 @@ except Exception:
     GRAY256 = [f'#{i:02x}{i:02x}{i:02x}' for i in range(256)]
 
 
-def _label_color(label: str, order: list, colors: list) -> str:
-    try:
-        return colors[order.index(str(label))]
-    except (ValueError, IndexError):
-        return FALLBACK
+def _label_color(label: str, color_map: dict) -> str:
+    return color_map.get(str(label), FALLBACK)
 
 
 # ── HDF5 loading ──────────────────────────────────────────────────────────────
 
 def load_h5(path: str):
-    """Return (df, patches_raw, patches_recon, images_raw, img_meta, pad, scale, result_dir)."""
+    """Return (df, patches_raw, patches_recon, images_raw, img_meta, pad, scale, result_dir, plots)."""
     with h5py.File(path, 'r') as f:
         df            = pd.read_csv(io.StringIO(f['meta/csv'][()].decode()))
         patches_raw   = f['patches/raw'][()]   if 'patches/raw'   in f else None
@@ -91,7 +89,9 @@ def load_h5(path: str):
         pad_size    = float(f.attrs.get('pad_size', 64))
         image_scale = float(f.attrs.get('image_scale', 1.0))
         result_dir  = Path(str(f.attrs.get('result_dir', '')))
-    return df, patches_raw, patches_recon, images_raw, img_meta, pad_size, image_scale, result_dir
+        plots = {key: bytes(f[f'plots/{key}'][()])
+                 for key in f.get('plots', {}).keys()}
+    return df, patches_raw, patches_recon, images_raw, img_meta, pad_size, image_scale, result_dir, plots
 
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
@@ -156,14 +156,16 @@ def _patch_figure(raw: np.ndarray, recon: np.ndarray, title: str = '') -> pn.pan
 
 def _legend_html() -> str:
     rows = ['<div style="font-size:11px;line-height:1.8;"><b>FA type</b>']
-    for lbl, col in zip(FA_ORDER, FA_COLORS):
+    for lbl in FA_ORDER:
+        col = FA_COLOR_MAP.get(lbl, FALLBACK)
         rows.append(
             f'<span style="background:{col};display:inline-block;'
             f'width:11px;height:11px;margin-right:5px;border-radius:2px;'
             f'vertical-align:middle;"></span>{lbl}'
         )
     rows.append('<br><b>Position</b>')
-    for lbl, col in zip(POS_ORDER, POS_COLORS):
+    for lbl in POS_ORDER:
+        col = POS_COLOR_MAP.get(lbl, FALLBACK)
         rows.append(
             f'<span style="background:{col};display:inline-block;'
             f'width:11px;height:11px;margin-right:5px;border-radius:2px;'
@@ -178,7 +180,7 @@ def _legend_html() -> str:
 def build_app(h5_path: str) -> pn.viewable.Viewable:
     print(f'[view] Loading {h5_path} ...')
     (df, patches_raw, patches_recon,
-     images_raw, img_meta, pad_size, image_scale, result_dir) = load_h5(h5_path)
+     images_raw, img_meta, pad_size, image_scale, result_dir, plots) = load_h5(h5_path)
     n = len(df)
     print(f'[view]   {n} patches, image_scale={image_scale}')
 
@@ -196,6 +198,23 @@ def build_app(h5_path: str) -> pn.viewable.Viewable:
         print(f'[view]   Old-format patches found in {recon_patches_dir}')
     if has_old_images:
         print(f'[view]   Old-format images: {len(old_img_files)} files')
+
+    # Derive model/variant name from result_dir (…/variant/dataset) or h5 path
+    if result_dir != Path('') and result_dir.parent.name:
+        model_name = result_dir.parent.name
+    else:
+        model_name = Path(h5_path).parent.parent.name
+    print(f'[view]   Model: {model_name}')
+
+    # Disk fallback for MSE plots not packed into H5
+    _plot_names = ['mse_distribution', 'mse_by_condition_split']
+    if result_dir != Path(''):
+        for pname in _plot_names:
+            if pname not in plots:
+                p = result_dir / 'analysis' / f'{pname}.png'
+                if p.exists():
+                    plots[pname] = p.read_bytes()
+                    print(f'[view]   Loaded plot from disk: {pname}.png')
 
     # Fall back to latent dims if UMAP not available
     if 'UMAP_1' not in df.columns:
@@ -219,8 +238,8 @@ def build_app(h5_path: str) -> pn.viewable.Viewable:
         fa_pred   = fa_pred.values,
         pos_pred  = pos_pred.values,
         filename  = df['filename'].astype(str).values,
-        color_fa  = [_label_color(v, FA_ORDER,  FA_COLORS)  for v in fa_pred],
-        color_pos = [_label_color(v, POS_ORDER, POS_COLORS) for v in pos_pred],
+        color_fa  = [_label_color(v, FA_COLOR_MAP)  for v in fa_pred],
+        color_pos = [_label_color(v, POS_COLOR_MAP) for v in pos_pred],
     )
     umap_data['color'] = list(umap_data['color_fa'])
     has_b64 = 'raw_b64' in df.columns
@@ -401,7 +420,7 @@ def build_app(h5_path: str) -> pn.viewable.Viewable:
                 ws.append(float(ps) * image_scale)
                 hs.append(float(ps) * image_scale)
                 cols.append(_label_color(
-                    str(row.get('fa_pred', '')), FA_ORDER, FA_COLORS))
+                    str(row.get('fa_pred', '')), FA_COLOR_MAP))
                 idxs.append(i)
             return dict(x=xs, y=ys, width=ws, height=hs, color=cols, df_idx=idxs)
 
@@ -430,12 +449,12 @@ def build_app(h5_path: str) -> pn.viewable.Viewable:
         img_pane = pn.pane.Bokeh(img_fig)
 
     # ── Shared detail panel (bottom bar) ──────────────────────────────────────
-    pred_md   = pn.pane.Markdown(
-        '*Hover the UMAP for a quick patch preview.  '
-        'Tap the UMAP **or** click a patch in the canvas for full details.*',
-        width=520,
+    pred_md   = pn.pane.HTML(
+        '<i style="color:#888;">Hover the UMAP for a quick patch preview.  '
+        'Tap the UMAP or click a patch in the canvas for full details.</i>',
+        width=300,
     )
-    patch_col = pn.Column(pn.pane.Markdown(''), width=480)
+    patch_col = pn.Column(pn.pane.Markdown(''), width=300)
 
     def _show_detail(idx: int) -> None:
         row   = df.iloc[idx]
@@ -443,9 +462,20 @@ def build_app(h5_path: str) -> pn.viewable.Viewable:
         pos   = str(row.get('pos_pred', '--'))
         fname = str(row.get('filename', ''))
         cond  = str(row.get('condition_name', row.get('condition', '')))
+        fa_color  = FA_COLOR_MAP.get(fa,  FALLBACK)
+        pos_color = POS_COLOR_MAP.get(pos, FALLBACK)
         pred_md.object = (
-            f"**Patch:** `{Path(fname).stem}`  ·  **Condition:** {cond}  \n"
-            f"**FA type:** {fa}  ·  **Position:** {pos}"
+            f'<div style="font-size:12px;line-height:2;">'
+            f'<b>Patch:</b> <code>{Path(fname).stem}</code><br>'
+            f'<b>Condition:</b> {cond}<br>'
+            f'<i>Prediction by</i> <code>{model_name}</code>:<br>'
+            f'<b>FA type:</b> '
+            f'<span style="font-size:14px;font-weight:bold;color:{fa_color};">'
+            f'{fa}</span><br>'
+            f'<b>Position:</b> '
+            f'<span style="font-size:14px;font-weight:bold;color:{pos_color};">'
+            f'{pos}</span>'
+            f'</div>'
         )
         if patches_raw is not None:
             patch_col.objects = [_patch_figure(
@@ -543,33 +573,66 @@ def build_app(h5_path: str) -> pn.viewable.Viewable:
         img_fig.on_event(Tap, _on_image_tap)
 
     # ── Legend ────────────────────────────────────────────────────────────────
-    legend = pn.pane.HTML(_legend_html(), width=480)
+    legend = pn.pane.HTML(_legend_html(), width=300)
+
+    # ── MSE plot button ───────────────────────────────────────────────────────
+    import base64
+    if plots:
+        def _b64(key: str) -> str:
+            return base64.b64encode(plots.get(key, b'')).decode('ascii')
+        mse_button = pn.widgets.Button(
+            name='Show MSE plots', button_type='primary', width=200,
+        )
+        mse_button.js_on_click(
+            args=dict(d=_b64('mse_distribution'),
+                      c=_b64('mse_by_condition_split')),
+            code="""
+            var w = window.open('', '_blank', 'width=1300,height=620');
+            w.document.write(
+                '<html><head><title>MSE plots</title></head>'
+                + '<body style="background:#1a1a1a;display:flex;gap:16px;'
+                + 'padding:20px;justify-content:center;align-items:flex-start;">'
+                + '<img src="data:image/png;base64,' + d
+                + '" style="max-height:560px;border-radius:6px;"/>'
+                + '<img src="data:image/png;base64,' + c
+                + '" style="max-height:560px;border-radius:6px;"/>'
+                + '</body></html>');
+            w.document.close();
+            """,
+        )
+    else:
+        mse_button = pn.pane.Markdown('*MSE plots not found.*', width=200)
 
     # ── Layout assembly ───────────────────────────────────────────────────────
-    bottom_bar = pn.Column(
-        pn.layout.Divider(),
-        pn.pane.Markdown('### Selected patch details', width=1060),
+    detail_col = pn.Column(
+        pn.pane.Markdown('### Details', width=300),
         pred_md,
-        pn.Row(patch_col, legend),
+        patch_col,
+        pn.layout.Divider(),
+        legend,
+        pn.layout.Divider(),
+        mse_button,
+        width=320,
     )
 
     if has_images:
-        right_col = pn.Column(img_select_widget, img_pane, width=540)
+        canvas_col = pn.Column(img_select_widget, img_pane, width=540)
     else:
-        right_col = pn.pane.Markdown(
+        canvas_col = pn.pane.Markdown(
             '*Full image data not in this HDF5.*\n\n'
             'Re-pack with `--image-scale 1.0` (default) to include canvas images.',
             width=540,
         )
 
     return pn.Column(
-        pn.pane.Markdown(
-            f'## Interactive Patch Viewer  ·  `{Path(h5_path).name}`',
+        pn.pane.HTML(
+            f'<h2>Interactive Patch Viewer &nbsp;·&nbsp; '
+            f'<a href="file://{Path(h5_path).resolve()}" target="_blank">{Path(h5_path).name}</a>'
+            f' &nbsp;·&nbsp; <code>{model_name}</code> trained from 0311 pax data</h2>',
             sizing_mode='stretch_width',
         ),
-        pn.Row(left_col, pn.Spacer(width=12), right_col,
-               sizing_mode='stretch_width'),
-        bottom_bar,
+        pn.Row(left_col, pn.Spacer(width=12), canvas_col,
+               pn.Spacer(width=12), detail_col),
     )
 
 

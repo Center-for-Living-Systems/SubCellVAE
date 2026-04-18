@@ -89,6 +89,7 @@ scripts/
   view_run_h5.py                           interactive local viewer for packed HDF5 files
   pack_interactive_h5.py                  pack one result dir into a structured HDF5 for viewer
   view_interactive.py                     interactive Panel+Bokeh patch viewer (hover+tap)
+  label_patches.py                        browser-based manual patch labeling tool (multi-user)
   run_newdata_validation.sh               end-to-end new-data validation pipeline
   run_supcon.sh                           supervised contrastive AE pipeline
   run_supcon_noflip.sh                    supervised contrastive AE (noise-only, no flip)
@@ -384,23 +385,20 @@ ae_results/other_paxillin/
 A local browser-based tool (Panel + Bokeh) for exploring UMAP embeddings and inspecting individual patches. Two directions of interaction are supported:
 
 ```
-┌──────────────────────────┬────────────────────────────────────┐
-│  [Colour by ▼]           │  [Image selector ▼]                │
-│                          │                                     │
-│  UMAP scatter            │  Full paxillin canvas               │
-│  • hover dot →           │  • coloured patch boxes             │
-│    patch thumbnail       │    (by FA type prediction)          │
-│    appears instantly     │  • click a patch location →         │
-│  • tap dot →             │    nearest patch highlighted        │
-│    detail panel updates  │    with white border;               │
-│    canvas scrolls to     │    large red dot appears on UMAP;   │
-│    source image          │    detail panel updates             │
-│                          │                                     │
-├──────────────────────────┴────────────────────────────────────┤
-│  Patch: control_f0000x0300y0400ps32  ·  Condition: control    │
-│  FA type: focal adhesion  ·  Position: Lamella                 │
-│  [Raw patch image]  [Reconstructed patch image]  [Legend]      │
-└────────────────────────────────────────────────────────────────┘
+┌──────────────────────┬──────────────────────┬──────────────────────┐
+│  [Colour by ▼]       │  [Image selector ▼]  │  ### Details         │
+│                      │                      │                      │
+│  UMAP scatter        │  Full paxillin canvas│  Patch: ctrl_f0000…  │
+│  • hover dot →       │  • coloured patch    │  FA: focal adhesion  │
+│    patch thumbnail   │    boxes (FA type)   │  Pos: Lamella        │
+│    instantly         │  • click a patch →   │                      │
+│  • tap dot →         │    nearest patch     │  [Raw patch]         │
+│    detail updates;   │    highlighted;      │  [Recon patch]       │
+│    canvas switches   │    red dot on UMAP;  │                      │
+│    to source image   │    detail updates    │  ────────────────    │
+│                      │                      │  FA-type legend      │
+│                      │                      │  Position legend     │
+└──────────────────────┴──────────────────────┴──────────────────────┘
 ```
 
 **Direction A — UMAP → canvas:**
@@ -453,6 +451,68 @@ panel serve scripts/view_interactive.py --args path/to/interactive.h5 --show
 ```bash
 pip install panel bokeh h5py pillow tifffile
 ```
+
+---
+
+## Patch Labeling Tool
+
+A browser-based manual annotation tool that works directly with `interactive.h5`.  
+Shows the full canvas image with all patch boxes as a grid; click a label button then click a patch to assign it.  Multiple annotators can work simultaneously — each browser tab is an independent session.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Patch Labeling Tool · interactive.h5  in GardelNas: Liya/…    │
+│  Annotator: [____________]   [Image selector ▼]                 │
+│  Active label: [Nascent Adhesion][focal complex][focal adhesion][No adhesion]   Labeled: N   [Finish & Save] │
+│  Select a label then click a patch.                             │
+│                                                                 │
+│  [Full canvas — unlabeled patches shown as faint grid;          │
+│   labeled patches filled in label colour at high opacity]       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Interaction:**
+- Type your name in the **Annotator** field (used in the output filename)
+- Select an image from the dropdown
+- Click a label button to set the active label
+- Click any patch on the canvas — it fills with the label colour instantly
+- Switch images freely; labels accumulate across all images in the session
+- **Finish & Save** writes `labels_{name}_{timestamp}.csv` next to the H5, with columns `filename, label, annotator`
+
+### Local use (single user)
+
+```bash
+python scripts/label_patches.py path/to/interactive.h5
+```
+
+### Lab server mode (shared NAS, multiple users)
+
+Run once on any machine that has the Python environment and can see the NAS:
+
+```bash
+# One dataset
+python scripts/label_patches.py /mnt/p/Liya/FA_patch_group_label/pfak/interactive.h5 \
+    --serve --nas-mount /mnt/p/ --nas-name "GardelNas Expansion"
+
+# Multiple datasets — each gets its own URL path
+python scripts/label_patches.py \
+    /mnt/p/Liya/FA_patch_group_label/pfak/interactive.h5 \
+    /mnt/p/Liya/FA_patch_group_label/nih3t3/interactive.h5 \
+    --serve --nas-mount /mnt/p/ --nas-name "GardelNas Expansion"
+# prints:
+#   http://128.135.108.109:5007/pfak    →  …/pfak/interactive.h5
+#   http://128.135.108.109:5007/nih3t3  →  …/nih3t3/interactive.h5
+```
+
+Lab members open the printed URL in any browser — no Python install needed.
+
+If the page loads but the app is unresponsive from another machine, the Ubuntu firewall may be blocking the port:
+
+```bash
+sudo ufw allow 5007/tcp
+```
+
+**Output CSV columns:** `filename`, `label`, `annotator`
 
 ---
 

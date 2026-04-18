@@ -253,6 +253,18 @@ def main() -> None:
             f.create_dataset('images/meta',
                              data=img_meta_df.to_csv(index=False).encode('utf-8'))
 
+        # ── Analysis plots (MSE distribution, MSE by condition) ───────────────
+        analysis_dir = result_dir / 'analysis'
+        plot_names = ['mse_distribution', 'mse_by_condition_split']
+        for pname in plot_names:
+            p = analysis_dir / f'{pname}.png'
+            if p.exists():
+                f.create_dataset(f'plots/{pname}',
+                                 data=np.frombuffer(p.read_bytes(), dtype=np.uint8))
+                print(f"[pack]   Packed plot: {pname}.png")
+            else:
+                print(f"[pack]   WARN: {p} not found")
+
     size_mb = out_h5.stat().st_size / 1e6
     print(f"[pack]   Done — {out_h5.name}  ({size_mb:.1f} MB,  {len(df)} patches)")
 
