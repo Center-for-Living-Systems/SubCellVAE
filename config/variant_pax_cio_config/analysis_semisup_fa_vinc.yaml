@@ -1,0 +1,31 @@
+# Analysis (cio): semisup_fa | dataset: vinc
+# MODEL_RUN is substituted at runtime by run_variant_pax_cio.sh
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  latents_csv  : root_folder + "/ae_results/variant_pax/MODEL_RUN/semisup_fa/vinc/latents_newdata.csv"
+  split_filter : "all"
+
+output:
+  out_dir : root_folder + "/ae_results/variant_pax/MODEL_RUN/semisup_fa/vinc/analysis"
+
+embedding:
+  methods:
+    - UMAP
+  umap_model_pkl    : root_folder + "/ae_results/MODEL_RUN/semisup_fa/fa_cls_lat8/umap_all_model.pkl"
+  umap_n_neighbors  : 15
+  umap_min_dist     : 0.1
+  umap_random_state : 42
+
+clustering:
+  kmeans_enabled    : true
+  kmeans_n_clusters : 5
+  dbscan_enabled    : false
+  boxplot_kind      : box
+
+label_orders:
+  condition_name:
+    - "control"
+    - "ycomp"
+
+misc:
+  log_level : "INFO"

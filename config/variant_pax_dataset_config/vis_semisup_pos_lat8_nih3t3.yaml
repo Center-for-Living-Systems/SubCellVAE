@@ -1,0 +1,31 @@
+# Cross-cls vis (dataset): semisup_pos | lat8 | dataset: nih3t3
+# MODEL_RUN is substituted at runtime by run_variant_pax_dataset.sh
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  latents_csv          : root_folder + "/ae_results/variant_pax/MODEL_RUN/semisup_pos/nih3t3/latents_newdata.csv"
+  fa_type_results_csv  : root_folder + "/ae_results/variant_pax/MODEL_RUN/semisup_pos/nih3t3/fa_cls_lat8/predictions_all.csv"
+  position_results_csv : root_folder + "/ae_results/variant_pax/MODEL_RUN/semisup_pos/nih3t3/pos_cls_lat8/predictions_all.csv"
+  umap_model_pkl       : root_folder + "/ae_results/MODEL_RUN/semisup_pos/fa_cls_lat8/umap_all_model.pkl"
+  annotation_csv       : null
+
+output:
+  out_dir : root_folder + "/ae_results/variant_pax/MODEL_RUN/semisup_pos/nih3t3/vis_lat8"
+
+labels:
+  fa_type_label_col  : "classification"
+  position_label_col : "Position"
+  fa_type_order:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+  position_order:
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+
+misc:
+  random_state : 42
+  log_level    : "INFO"

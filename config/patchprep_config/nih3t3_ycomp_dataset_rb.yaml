@@ -1,0 +1,53 @@
+# Dataset   : nih3t3 (20260227 – NIH3T3, Vinc/rb647 + pax/m555)  [truly new, different cell line]
+# Condition : ycomp
+# Norm      : dataset  (percentile stretch, rolling ball radius 20)
+# Seg       : on-the-fly (default); see commented cell_mask_folder for pre-computed option
+paths:
+  root_folder      : "/home/lding/lding/fa_data_analysis"
+  image_folder     : root_folder + "/fa_data/other_paxillin/20260227_NIH3T3_ZyxinGFP,Phalloidin405,Vinc_rb647,Pax_m555_reduced_size_AH/YCompound"
+  cell_mask_folder : null   # on-the-fly segmentation (default)
+  patch_output_dir : root_folder + "/ae_results/patches/dataset_rb/nih3t3/ycomp/tiff_patches32"
+  plot_output_dir  : root_folder + "/ae_results/patches/dataset_rb/nih3t3/ycomp/plot_patches32"
+
+experiment:
+  condition : "ycomp"
+  major_ch  : 1
+
+input:
+  file_type : "czi"
+  start_ind : 0
+  end_ind   : 999
+
+patch:
+  patch_size   : 32
+  mask_ratio   : 0.4
+  pad_size     : 64
+  patch_prefix : "ycomp"
+
+preprocessing:
+  rolling_ball_radius : 20
+
+normalization:
+  norm_mode : "dataset"
+  norm_lo   : 0.2
+  norm_hi   : 99.8
+
+segmentation:
+  seg_ch                  : 1
+  seg_threshold           : 0.1
+  seg_close_size          : 11
+  seg_min_size_initial    : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final      : 30000
+
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+misc:
+  dpi           : 256
+  debug         : false
+  log_level     : "INFO"
+  use_timestamp : false

@@ -43,7 +43,7 @@ patch:
 # Preprocessing
 # ---------------------------------------------------------------------------
 preprocessing:
-  rolling_ball_radius : 10   # set to 10 to enable rolling ball before normalization
+  rolling_ball_radius : null   # disabled: RB suppresses cell body → tiny mean_inside → huge amplification
 
 # ---------------------------------------------------------------------------
 # Normalization  –  median BG subtraction → cell mean division → fixed scale

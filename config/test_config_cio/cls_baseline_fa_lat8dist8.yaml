@@ -54,8 +54,8 @@ knn:
 
 dist_features:
   patch_prep_dirs:
-    - root_folder + "/ae_results/pax_ch_patch/plot_control"
-    - root_folder + "/ae_results/pax_ch_patch/plot_ycomp"
+    - root_folder + "/ae_results/pax_ch_patch/plot_control_cell_insideoutside"
+    - root_folder + "/ae_results/pax_ch_patch/plot_ycomp_cell_insideoutside"
   feature_weight : 20.0
 
 patch_sort:

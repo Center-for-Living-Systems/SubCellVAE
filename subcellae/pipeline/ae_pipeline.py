@@ -330,6 +330,33 @@ def _parse_patch_coords(filename: str):
 # Latent extraction and CSV export
 # ---------------------------------------------------------------------------
 
+def _patch_hessian_l1(raw: np.ndarray, recon: np.ndarray) -> float:
+    """Mean absolute difference of Hessian maps between raw and recon patches.
+
+    For each interior pixel (outermost row/col excluded) computes the
+    Frobenius norm of the 2×2 Hessian matrix as a scalar Hessian map,
+    then returns mean(|H_raw - H_recon|) over all interior pixels.
+    For multi-channel (C, H, W) the result is averaged over channels.
+    """
+    if raw.ndim == 3:  # (C, H, W) — average over channels
+        return float(np.mean([_patch_hessian_l1(raw[c], recon[c])
+                               for c in range(raw.shape[0])]))
+    # single channel: (H, W)
+    r, p = raw.astype(np.float64), recon.astype(np.float64)
+    # second derivatives at interior pixels via finite differences
+    Ixx_r = r[1:-1, 2:]  + r[1:-1, :-2] - 2 * r[1:-1, 1:-1]
+    Ixx_p = p[1:-1, 2:]  + p[1:-1, :-2] - 2 * p[1:-1, 1:-1]
+    Iyy_r = r[2:, 1:-1]  + r[:-2, 1:-1] - 2 * r[1:-1, 1:-1]
+    Iyy_p = p[2:, 1:-1]  + p[:-2, 1:-1] - 2 * p[1:-1, 1:-1]
+    Ixy_r = (r[2:, 2:] - r[2:, :-2] - r[:-2, 2:] + r[:-2, :-2]) / 4
+    Ixy_p = (p[2:, 2:] - p[2:, :-2] - p[:-2, 2:] + p[:-2, :-2]) / 4
+    # scalar Hessian map = Frobenius norm of [[Ixx, Ixy],[Ixy, Iyy]] per pixel
+    H_raw   = np.sqrt(Ixx_r ** 2 + 2 * Ixy_r ** 2 + Iyy_r ** 2)
+    H_recon = np.sqrt(Ixx_p ** 2 + 2 * Ixy_p ** 2 + Iyy_p ** 2)
+    # per-pixel absolute difference, then mean
+    return float(np.mean(np.abs(H_raw - H_recon)))
+
+
 def _extract_latents(model, loader, device: str, model_type: str) -> dict:
     """Run inference over *loader* and collect per-patch latents and reconstructions.
 
@@ -383,13 +410,18 @@ def _extract_latents(model, loader, device: str, model_type: str) -> dict:
 
     # Per-patch reconstruction metrics
     all_mse, all_mean_intensity, all_norm_mse = [], [], []
+    all_l1, all_hessian_l1 = [], []
     for raw_p, recon_p in zip(all_raws, all_recons):
-        mse        = float(np.mean((raw_p - recon_p) ** 2))
+        diff       = raw_p - recon_p
+        mse        = float(np.mean(diff ** 2))
+        l1         = float(np.mean(np.abs(diff)))
         mean_int   = float(np.mean(raw_p))
         norm_mse   = mse / mean_int if mean_int > 0 else float("nan")
         all_mse.append(mse)
+        all_l1.append(l1)
         all_mean_intensity.append(mean_int)
         all_norm_mse.append(norm_mse)
+        all_hessian_l1.append(_patch_hessian_l1(raw_p, recon_p))
 
     return {
         "paths":               all_paths,
@@ -400,8 +432,10 @@ def _extract_latents(model, loader, device: str, model_type: str) -> dict:
         "raws":                all_raws,
         "recons":              all_recons,
         "recon_mse":           all_mse,
+        "recon_l1":            all_l1,
         "mean_intensity":      all_mean_intensity,
         "norm_mse":            all_norm_mse,
+        "recon_hessian_l1":    all_hessian_l1,
     }
 
 
@@ -447,8 +481,10 @@ def _save_latent_csv(
                 "group":               _extract_group_key(path),
                 "split":               split_name,
                 "recon_mse":           result["recon_mse"][i],
+                "recon_l1":            result["recon_l1"][i],
                 "mean_intensity":      result["mean_intensity"][i],
                 "norm_mse":            result["norm_mse"][i],
+                "recon_hessian_l1":    result["recon_hessian_l1"][i],
                 "annotation_label":    ann_int,
                 "annotation_label_name": int_to_label.get(ann_int, ""),
             }
@@ -464,7 +500,7 @@ def _save_latent_csv(
     latent_cols = [f"z_{d}" for d in range(latent_dim)]
     meta_cols   = ["filename", "filepath", "condition", "condition_name",
                    "group", "split"]
-    metric_cols = ["recon_mse", "mean_intensity", "norm_mse"]
+    metric_cols = ["recon_mse", "recon_l1", "mean_intensity", "norm_mse", "recon_hessian_l1"]
     ann_cols    = ["annotation_label", "annotation_label_name"]
     if has_label2:
         ann_cols += ["annotation_label_2", "annotation_label_2_name"]

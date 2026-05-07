@@ -1,0 +1,29 @@
+# Cls Apply (POS type, dataset): semicon_fa | lat8 | dataset: ppax
+# MODEL_RUN is substituted at runtime by run_variant_pax_dataset.sh
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  latents_csv : root_folder + "/ae_results/variant_pax/MODEL_RUN/semicon_fa/ppax/latents_newdata.csv"
+
+model:
+  model_pkl      : root_folder + "/ae_results/MODEL_RUN/semicon_fa/pos_cls_lat8/lgbm_model.pkl"
+  umap_model_pkl : root_folder + "/ae_results/MODEL_RUN/semicon_fa/pos_cls_lat8/umap_all_model.pkl"
+
+output:
+  out_dir : root_folder + "/ae_results/variant_pax/MODEL_RUN/semicon_fa/ppax/pos_cls_lat8"
+
+labels:
+  label_order:
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+
+features:
+  feature_cols : null
+
+dist_features:
+  patch_prep_dirs: null
+  feature_weight : 20.0
+
+misc:
+  log_level : "INFO"

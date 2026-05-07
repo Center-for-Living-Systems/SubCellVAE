@@ -1,0 +1,63 @@
+# =============================================================================
+# AE variant: semicon_pos  (SupCon AE, Position label supervision)
+# Contrastive loss: SupCon — same Position patches are positive pairs
+# Augmentation: D4 rotations + H-flip (cell_insideoutside norm)
+# Results: results/test_run_cio_rb/semicon_pos/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+data:
+  patch_dirs:
+    - path           : root_folder + "/ae_results/patches/cio_rb/vinc/control/tiff_patches32"
+      condition      : 0
+      condition_name : "control"
+    - path           : root_folder + "/ae_results/patches/cio_rb/vinc/ycomp/tiff_patches32"
+      condition      : 1
+      condition_name : "ycomp"
+
+output:
+  result_dir : root_folder + "/ae_results/test_run_cio_rb/semicon_pos"
+
+model:
+  model_type   : "supcon"
+  latent_dim   : 8
+  input_ps     : 32
+  no_ch        : 1
+  BN_flag      : false
+  dropout_flag : false
+
+  # -- Contrastive-specific --------------------------------------------------
+  proj_dim        : 64     # projection-head output dim for SupCon loss
+  noise_prob      : 0.0    # salt-and-pepper noise (disabled)
+  temperature     : 0.1    # SupCon temperature (lower = sharper class discrimination)
+  lambda_recon    : 1.0    # weight on reconstruction term
+  lambda_contrast : 1.0    # weight on SupCon term
+  use_flip        : true   # H-flip covers all 8 D4 symmetries with 4 rotations
+
+training:
+  epochs         : 500
+  lr             : 0.001
+  batch_size     : 128
+  val_split      : 0.2
+  loss_norm_flag : false
+  group_split    : true
+  lr_scheduler   : "cosine"
+  lr_min         : 1e-5
+
+annotation:
+  annotation_file : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  label_col       : "Position"
+  filename_col    : "unique_ID"
+  label_order     :
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+
+reconstruction:
+  save_recon      : true
+  recon_pad_size  : 64
+  recon_image_size: 1024
+
+misc:
+  device    : "auto"
+  log_level : "INFO"

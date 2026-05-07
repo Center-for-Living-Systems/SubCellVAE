@@ -5,10 +5,10 @@
 root_folder : "/home/lding/lding/fa_data_analysis"
 data:
   patch_dirs:
-    - path           : root_folder + "/ae_results/pax_ch_patch/patch_control_cell_insideoutside"
+    - path           : root_folder + "/ae_results/patches/cio/vinc/control/tiff_patches32"
       condition      : 0
       condition_name : "control"
-    - path           : root_folder + "/ae_results/pax_ch_patch/patch_ycomp_cell_insideoutside"
+    - path           : root_folder + "/ae_results/patches/cio/vinc/ycomp/tiff_patches32"
       condition      : 1
       condition_name : "ycomp"
 

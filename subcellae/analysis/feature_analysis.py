@@ -1,8 +1,138 @@
+import os
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.spatial.distance import pdist, squareform
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset, random_split
+
+
+def latent_distance_histogram(
+    features,
+    labels,
+    save_path,
+    metric="euclidean",
+    unlabeled_values=(-1, "unlabeled", "unknown", None),
+    bins=50,
+    sample_pairs=None,
+    random_state=0,
+    density=True,
+    title="Latent space pairwise distances",
+):
+    """
+    Compute and plot intra-class and inter-class distance distributions.
+
+    Parameters
+    ----------
+    features : array-like, shape (N, D)
+        Latent feature vectors.
+    labels : array-like, shape (N,)
+        Labels. Unlabeled samples (matching *unlabeled_values*) are ignored.
+    save_path : str
+        Path to save the histogram figure.
+    metric : str
+        Distance metric for scipy pdist (e.g. "euclidean", "cosine").
+    unlabeled_values : tuple
+        Values treated as unlabeled.
+    bins : int
+        Number of histogram bins.
+    sample_pairs : int or None
+        If set, randomly subsample this many intra/inter pairs each
+        (useful for large datasets to keep memory/time manageable).
+    random_state : int
+        Random seed for pair sampling.
+    density : bool
+        Normalise histograms as densities.
+    title : str
+        Plot title.
+
+    Returns
+    -------
+    dict with mean/median intra and inter distances and their ratios.
+    """
+    features = np.asarray(features)
+    labels = np.asarray(labels, dtype=object)
+
+    if features.ndim != 2:
+        raise ValueError("features should have shape (N, D).")
+    if len(labels) != features.shape[0]:
+        raise ValueError("labels length must match number of feature rows.")
+
+    labeled_mask = np.ones(len(labels), dtype=bool)
+    for v in unlabeled_values:
+        if v is None:
+            labeled_mask &= np.array([x is not None for x in labels])
+        else:
+            labeled_mask &= labels != v
+    labeled_mask &= np.array(
+        [not (isinstance(x, float) and np.isnan(x)) for x in labels]
+    )
+
+    X = features[labeled_mask]
+    y = labels[labeled_mask]
+
+    if len(X) < 2:
+        raise ValueError("Need at least two labeled samples.")
+    if len(np.unique(y)) < 2:
+        raise ValueError("Need at least two labeled classes.")
+
+    dist_matrix = squareform(pdist(X, metric=metric))
+    i_idx, j_idx = np.triu_indices(len(X), k=1)
+    same_class = y[i_idx] == y[j_idx]
+    intra_distances = dist_matrix[i_idx[same_class],  j_idx[same_class]]
+    inter_distances = dist_matrix[i_idx[~same_class], j_idx[~same_class]]
+
+    if len(intra_distances) == 0:
+        raise ValueError("No intra-class pairs found.")
+    if len(inter_distances) == 0:
+        raise ValueError("No inter-class pairs found.")
+
+    if sample_pairs is not None:
+        rng = np.random.default_rng(random_state)
+        if len(intra_distances) > sample_pairs:
+            intra_distances = rng.choice(intra_distances, size=sample_pairs, replace=False)
+        if len(inter_distances) > sample_pairs:
+            inter_distances = rng.choice(inter_distances, size=sample_pairs, replace=False)
+
+    mean_intra   = float(np.mean(intra_distances))
+    mean_inter   = float(np.mean(inter_distances))
+    median_intra = float(np.median(intra_distances))
+    median_inter = float(np.median(inter_distances))
+
+    results = {
+        "n_labeled_samples":              int(len(X)),
+        "n_classes":                      int(len(np.unique(y))),
+        "n_intra_pairs":                  int(len(intra_distances)),
+        "n_inter_pairs":                  int(len(inter_distances)),
+        "mean_intra":                     mean_intra,
+        "mean_inter":                     mean_inter,
+        "median_intra":                   median_intra,
+        "median_inter":                   median_inter,
+        "mean_inter_over_intra_ratio":    mean_inter / mean_intra,
+        "median_inter_over_intra_ratio":  median_inter / median_intra,
+    }
+
+    if os.path.dirname(save_path):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    plt.figure(figsize=(6, 4))
+    plt.hist(intra_distances, bins=bins, alpha=0.6, density=density,
+             label=f"Intra-class  mean={mean_intra:.3f}")
+    plt.hist(inter_distances, bins=bins, alpha=0.6, density=density,
+             label=f"Inter-class  mean={mean_inter:.3f}")
+    plt.xlabel(f"Pairwise distance ({metric})")
+    plt.ylabel("Density" if density else "Count")
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+
+    return results
 import tifffile as tiff
 import os
 import numpy as np

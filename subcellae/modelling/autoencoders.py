@@ -5,7 +5,7 @@ Four autoencoder variants:
   1. AE          – standard convolutional autoencoder
   2. VAE32       – variational AE (standard VAE or beta-VAE via beta parameter)
   3. SemiSupAE   – semi-supervised AE with auxiliary classification head
-  4. ContrastiveAE – contrastive AE using salt-and-pepper noise augmentation
+  4. ContrastiveAE – contrastive AE with rotation × flip geometric augmentation
 
 All models share the same encoder/decoder backbone dimensions and expect
 square input patches (default 32×32).
@@ -79,37 +79,71 @@ def intensity_scale(x: torch.Tensor, scale_range: tuple = (0.8, 1.2)) -> torch.T
 
 def augment_contrastive_view(
     x: torch.Tensor,
-    noise_prob: float = 0.05,
-    use_flip: bool    = True,
+    rotation_mode: str = "rot90",
+    use_flip: bool = False,
+    noise_prob: float = 0.0,
+    intensity_scale_range: tuple | None = None,
 ) -> torch.Tensor:
     """
     Create an augmented view for contrastive learning.
 
-    Augmentations applied (in order):
-      1. Random horizontal flip   (50 % probability per image) — if use_flip
-      2. Random vertical flip     (50 % probability per image) — if use_flip
-      3. Salt-and-pepper noise    (random pixel corruption)
+    Geometric augmentation pool (per image, uniformly sampled):
+      - rotation_mode="rot90", use_flip=False : 4 transforms
+        {0°, 90°, 180°, 270°}
+      - rotation_mode="rot90", use_flip=True  : 8 transforms
+        all elements of the dihedral group D4 (symmetries of the square):
+        {0°, 90°, 180°, 270°} × {no flip, horizontal flip}
+        Note: adding a vertical flip option would produce duplicates —
+        e.g. R180+H == V flip, R180+V == H flip, R270+H == R90+V, etc.
+        Sampling 4 rotations × {none, H flip} covers all 8 D4 elements
+        exactly once with no redundancy.
+
+    Optionally followed by intensity scaling and salt-and-pepper noise.
 
     Parameters
     ----------
-    x          : (B, C, H, W) clean patches, values in [0, 1]
-    noise_prob : fraction of pixels corrupted by salt/pepper noise
-    use_flip   : whether to apply random H/V flips (default True)
+    x : (B, C, H, W) clean patches, values in [0, 1]
+    rotation_mode :
+        "rot90" : random k*90° rotation per image, k in {0,1,2,3} (default)
+        "none"  : skip rotation
+    use_flip : if True, each image independently gets {no flip, H flip}
+               after rotation, covering all 8 D4 symmetries uniformly
+    noise_prob : fraction of pixels corrupted by salt-and-pepper noise;
+                 0.0 disables noise entirely
+    intensity_scale_range : optional (low, high) multiplicative intensity
+                            range applied per image after geometry ops
     """
+    if rotation_mode not in {"none", "rot90"}:
+        raise ValueError(f"Unsupported rotation_mode: {rotation_mode}")
+
     out = x.clone()
+    bsz = out.size(0)
 
+    # ── Rotation: 0°, 90°, 180°, 270° ────────────────────────────────────────
+    if rotation_mode == "rot90":
+        ks = torch.randint(0, 4, (bsz,), device=out.device)
+        rotated = out.clone()
+        for k in range(4):
+            mask = ks == k
+            if mask.any():
+                rotated[mask] = torch.rot90(out[mask], k=int(k), dims=(-2, -1))
+        out = rotated
+
+    # ── Flip: {no flip, horizontal flip} — covers all 8 D4 elements with ─────
+    # ── rotation, with no duplicates                                       ─────
     if use_flip:
-        # Random horizontal flip (W dimension = -1)
-        flip_h = torch.rand(x.size(0), device=x.device) > 0.5
-        if flip_h.any():
-            out[flip_h] = out[flip_h].flip(-1)
+        h_mask = torch.rand(bsz, device=out.device) > 0.5
+        if h_mask.any():
+            out[h_mask] = out[h_mask].flip(-1)
 
-        # Random vertical flip (H dimension = -2)
-        flip_v = torch.rand(x.size(0), device=x.device) > 0.5
-        if flip_v.any():
-            out[flip_v] = out[flip_v].flip(-2)
+    # ── Intensity scaling (optional) ──────────────────────────────────────────
+    if intensity_scale_range is not None:
+        out = intensity_scale(out, scale_range=intensity_scale_range)
 
-    out = salt_and_pepper_noise(out, noise_prob=noise_prob)
+    # ── Salt-and-pepper noise (optional) ─────────────────────────────────────
+    if noise_prob > 0:
+        out = salt_and_pepper_noise(out, noise_prob=noise_prob)
+
     return out
 
 
@@ -133,13 +167,14 @@ def plot_reconstruction_progress(model, dataloader, device, epoch, vae_mode=Fals
         """Return a 2-D (H, W) array for imshow; picks channel 0 if multi-channel."""
         return t[0] if t.shape[0] > 1 else t.squeeze()
 
-    n = min(8, x.size(0))
+    n = min(16, x.size(0))
+    idx = torch.randperm(x.size(0))[:n]
     fig, axes = plt.subplots(2, n, figsize=(n, 2))
-    for i in range(n):
-        axes[0, i].imshow(_to_display(x[i]), cmap="gray", vmin=0, vmax=1)
-        axes[0, i].axis("off")
-        axes[1, i].imshow(_to_display(recon[i]), cmap="gray", vmin=0, vmax=1)
-        axes[1, i].axis("off")
+    for col, i in enumerate(idx):
+        axes[0, col].imshow(_to_display(x[i]), cmap="gray", vmin=0, vmax=1)
+        axes[0, col].axis("off")
+        axes[1, col].imshow(_to_display(recon[i]), cmap="gray", vmin=0, vmax=1)
+        axes[1, col].axis("off")
     plt.suptitle(f"Reconstruction @ epoch {epoch}")
     plt.tight_layout()
     return fig
@@ -206,7 +241,7 @@ class AE(nn.Module):
             nn.ConvTranspose2d(64, 32,    3, stride=2, padding=1, output_padding=1),
             maybe_bn(32), nn.LeakyReLU(0.01),
             nn.ConvTranspose2d(32, no_ch, 3, stride=2, padding=1, output_padding=1),
-            nn.Hardtanh(0.0, 1.0),  # clamps to [0,1]; avoids sigmoid saturation on sparse patches
+            nn.Sigmoid(),  # output in (0,1); always has non-zero gradient (avoids Hardtanh dead zone on sparse patches)
         )
 
         self.final_size = final_size
@@ -491,7 +526,6 @@ def train_vae(
             )
 
         if (epoch + 1) % recon_view_period == 0:
-            fig, axes = plt.subplots(2, 8, figsize=(8, 2))
             model.eval()
             with torch.no_grad():
                 for x, *_ in val_loader:
@@ -499,12 +533,14 @@ def train_vae(
                     xhat, *_ = model(x)
                     x = x.cpu(); xhat = xhat.cpu()
                     break
-            n_show = min(8, x.size(0))
-            for i in range(n_show):
-                axes[0, i].imshow(x[i].squeeze(),    cmap="gray", vmin=0, vmax=1)
-                axes[0, i].axis("off")
-                axes[1, i].imshow(xhat[i].squeeze(), cmap="gray", vmin=0, vmax=1)
-                axes[1, i].axis("off")
+            n_show = min(16, x.size(0))
+            idx = torch.randperm(x.size(0))[:n_show]
+            fig, axes = plt.subplots(2, n_show, figsize=(n_show, 2))
+            for col, i in enumerate(idx):
+                axes[0, col].imshow(x[i].squeeze(),    cmap="gray", vmin=0, vmax=1)
+                axes[0, col].axis("off")
+                axes[1, col].imshow(xhat[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+                axes[1, col].axis("off")
             plt.suptitle(f"VAE recon @ epoch {epoch+1}  β={current_beta:.2f}")
             plt.tight_layout()
             fig.savefig(os.path.join(result_dir, f"vae_recon_ep{epoch+1}.png"))
@@ -593,7 +629,7 @@ class SemiSupAE(nn.Module):
             nn.ConvTranspose2d(64, 32,    3, stride=2, padding=1, output_padding=1),
             maybe_bn(32), nn.LeakyReLU(0.01),
             nn.ConvTranspose2d(32, no_ch, 3, stride=2, padding=1, output_padding=1),
-            nn.Hardtanh(0.0, 1.0),  # clamps to [0,1]; avoids sigmoid saturation on sparse patches
+            nn.Sigmoid(),  # output in (0,1); always has non-zero gradient (avoids Hardtanh dead zone on sparse patches)
         )
 
         # ---------- classification head (primary) ----------
@@ -956,16 +992,16 @@ class ContrastiveAE(nn.Module):
 
     The model uses two views of each image:
       - view 1 : the original (clean) patch
-      - view 2 : salt-and-pepper corrupted patch (nuisance variation)
+      - view 2 : an augmented patch, typically a rotated version of the same patch
 
-    The encoder is trained to produce embeddings that are *invariant* to the
-    noise corruption via an NT-Xent (SimCLR-style) contrastive loss on a
+    The encoder is trained to produce embeddings that are tolerant to
+    orientation changes via an NT-Xent (SimCLR-style) contrastive loss on a
     projection head, while the decoder is still trained to reconstruct the
-    *original* image from the clean-view embedding.
+    original image from the clean-view embedding.
 
     Combined loss:
         L = λ_recon * MSE(decode(z_clean), x_clean)
-          + λ_contrast * NT-Xent(proj(z_clean), proj(z_noisy))
+          + λ_contrast * NT-Xent(proj(z_clean), proj(z_aug))
 
     Parameters
     ----------
@@ -973,7 +1009,8 @@ class ContrastiveAE(nn.Module):
     proj_dim     : output dimension of the projection head (for contrastive loss)
     input_ps     : spatial size of (square) input patch
     no_ch        : number of input channels
-    noise_prob   : salt-and-pepper noise probability for the second view
+    noise_prob   : legacy attribute kept for compatibility; augmentation is
+                   configured in the training loop
     BN_flag      : BatchNorm in conv layers
     """
 
@@ -1020,7 +1057,7 @@ class ContrastiveAE(nn.Module):
             nn.ConvTranspose2d(64, 32,    3, stride=2, padding=1, output_padding=1),
             maybe_bn(32), nn.LeakyReLU(0.01),
             nn.ConvTranspose2d(32, no_ch, 3, stride=2, padding=1, output_padding=1),
-            nn.Hardtanh(0.0, 1.0),  # clamps to [0,1]; avoids sigmoid saturation on sparse patches
+            nn.Sigmoid(),  # output in (0,1); always has non-zero gradient (avoids Hardtanh dead zone on sparse patches)
         )
 
         # ---------- projection head (for contrastive loss only) ----------
@@ -1151,7 +1188,7 @@ def contrastive_ae_loss(
     x: torch.Tensor,
     recon: torch.Tensor,
     proj_clean: torch.Tensor,
-    proj_noisy: torch.Tensor,
+    proj_aug: torch.Tensor,
     lambda_recon: float    = 1.0,
     lambda_contrast: float = 0.5,
     temperature: float     = 0.5,
@@ -1164,7 +1201,7 @@ def contrastive_ae_loss(
     total_loss, recon_loss, contrast_loss
     """
     recon_loss    = F.mse_loss(recon, x, reduction="mean")
-    contrast_loss = nt_xent_loss(proj_clean, proj_noisy, temperature)
+    contrast_loss = nt_xent_loss(proj_clean, proj_aug, temperature)
     total         = lambda_recon * recon_loss + lambda_contrast * contrast_loss
     return total, recon_loss, contrast_loss
 
@@ -1179,25 +1216,29 @@ def train_contrastive_ae(
     lambda_recon,
     lambda_contrast,
     result_dir,
-    noise_prob: float            = 0.05,
+    rotation_mode: str           = "rot90",
+    noise_prob: float            = 0.0,
     temperature: float           = 0.5,
-    use_flip: bool               = True,
-    intensity_scale_range: tuple = (0.8, 1.2),   # kept for API compat, no longer used
+    use_flip: bool               = False,
+    intensity_scale_range: tuple | None = None,
 ):
     """
     Training loop for ContrastiveAE (self-supervised NT-Xent).
 
     For each batch two views are created on-the-fly:
       - View 1 (clean)     : the original patch
-      - View 2 (augmented) : randomly flipped then salt-and-pepper corrupted
+      - View 2 (augmented) : typically a rotated version of the same patch
 
     The contrastive loss (NT-Xent) encourages the encoder to produce
-    embeddings invariant to geometric flips and pixel-level noise.
+    embeddings that keep morphologically similar patches close even when the
+    same structure appears at different orientations.
 
     Parameters
     ----------
-    noise_prob            : fraction of pixels corrupted by salt-and-pepper noise
-    intensity_scale_range : deprecated, kept for backward-compatibility, ignored
+    rotation_mode         : augmentation used to define positive pairs;
+                            default "rot90" for random 90° rotations
+    noise_prob            : optional salt-and-pepper corruption probability
+    intensity_scale_range : optional per-image intensity scaling range
     """
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
@@ -1216,17 +1257,17 @@ def train_contrastive_ae(
             x = batch[0].to(device)
 
             # --- two views ---
-            x_noisy = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
+            x_aug = augment_contrastive_view(x, rotation_mode=rotation_mode, use_flip=use_flip, noise_prob=noise_prob, intensity_scale_range=intensity_scale_range)
 
             z_clean = model.encode(x)
-            z_noisy = model.encode(x_noisy)
+            z_aug = model.encode(x_aug)
 
             recon      = model.decode(z_clean)
             proj_clean = model.project(z_clean)
-            proj_noisy = model.project(z_noisy)
+            proj_aug = model.project(z_aug)
 
             loss, rl, cl = contrastive_ae_loss(
-                x, recon, proj_clean, proj_noisy,
+                x, recon, proj_clean, proj_aug,
                 lambda_recon=lambda_recon,
                 lambda_contrast=lambda_contrast,
                 temperature=temperature,
@@ -1243,17 +1284,17 @@ def train_contrastive_ae(
         with torch.no_grad():
             for batch in val_loader:
                 x = batch[0].to(device)
-                x_noisy = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
+                x_aug = augment_contrastive_view(x, rotation_mode=rotation_mode, use_flip=use_flip, noise_prob=noise_prob, intensity_scale_range=intensity_scale_range)
 
                 z_clean = model.encode(x)
-                z_noisy = model.encode(x_noisy)
+                z_aug = model.encode(x_aug)
 
                 recon      = model.decode(z_clean)
                 proj_clean = model.project(z_clean)
-                proj_noisy = model.project(z_noisy)
+                proj_aug = model.project(z_aug)
 
                 loss, rl, cl = contrastive_ae_loss(
-                    x, recon, proj_clean, proj_noisy,
+                    x, recon, proj_clean, proj_aug,
                     lambda_recon=lambda_recon,
                     lambda_contrast=lambda_contrast,
                     temperature=temperature,
@@ -1276,27 +1317,28 @@ def train_contrastive_ae(
             fig.savefig(os.path.join(result_dir, f"contrastive_recon_ep{epoch+1}.png"))
             plt.close(fig)
 
-            # Also visualise clean vs noisy vs recon side-by-side
+            # Also visualise clean vs augmented vs recon side-by-side
             model.eval()
             with torch.no_grad():
                 for batch in val_loader:
                     x = batch[0].to(device)
-                    x_noisy = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
+                    x_aug = augment_contrastive_view(x, rotation_mode=rotation_mode, use_flip=use_flip, noise_prob=noise_prob, intensity_scale_range=intensity_scale_range)
                     recon, _ = model(x)
-                    x = x.cpu(); x_noisy = x_noisy.cpu(); recon = recon.cpu()
+                    x = x.cpu(); x_aug = x_aug.cpu(); recon = recon.cpu()
                     break
 
-            n_show = min(6, x.size(0))
+            n_show = min(16, x.size(0))
+            idx = torch.randperm(x.size(0))[:n_show]
             fig2, axes = plt.subplots(3, n_show, figsize=(n_show, 3))
-            for i in range(n_show):
-                axes[0, i].imshow(x[i].squeeze(),       cmap="gray", vmin=0, vmax=1)
-                axes[0, i].axis("off")
-                axes[1, i].imshow(x_noisy[i].squeeze(), cmap="gray", vmin=0, vmax=1)
-                axes[1, i].axis("off")
-                axes[2, i].imshow(recon[i].squeeze(),   cmap="gray", vmin=0, vmax=1)
-                axes[2, i].axis("off")
+            for col, i in enumerate(idx):
+                axes[0, col].imshow(x[i].squeeze(),     cmap="gray", vmin=0, vmax=1)
+                axes[0, col].axis("off")
+                axes[1, col].imshow(x_aug[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+                axes[1, col].axis("off")
+                axes[2, col].imshow(recon[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+                axes[2, col].axis("off")
             axes[0, 0].set_ylabel("clean",  fontsize=7)
-            axes[1, 0].set_ylabel("noisy",  fontsize=7)
+            axes[1, 0].set_ylabel("aug",    fontsize=7)
             axes[2, 0].set_ylabel("recon",  fontsize=7)
             plt.suptitle(f"Contrastive AE @ epoch {epoch+1}")
             plt.tight_layout()
@@ -1326,15 +1368,18 @@ def train_supervised_contrastive_ae(
     lambda_recon,
     lambda_contrast,
     result_dir,
-    noise_prob: float  = 0.05,
+    rotation_mode: str = "rot90",
+    noise_prob: float  = 0.0,
     temperature: float = 0.5,
-    use_flip: bool     = True,
+    use_flip: bool     = False,
+    intensity_scale_range: tuple | None = None,
 ):
     """
     Training loop for ContrastiveAE with Supervised Contrastive loss (SupCon).
 
-    Two views per image are created on-the-fly (random flips + salt-and-pepper
-    noise).  For each mini-batch the 2N-sized projection set is built by
+    Two views per image are created on-the-fly (typically random 90° rotations,
+    optionally with flips / noise / intensity scaling). For each mini-batch the
+    2N-sized projection set is built by
     concatenating both views.  The SupCon loss pulls together:
       - same-class patches from different images (when labels are available)
       - each image with its own augmented view (fallback for unlabeled patches)
@@ -1363,7 +1408,7 @@ def train_supervised_contrastive_ae(
             x      = batch[0].to(device)
             labels = batch[2].to(device)   # annotation_label; -1 if unlabeled
 
-            x_aug = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
+            x_aug = augment_contrastive_view(x, rotation_mode=rotation_mode, use_flip=use_flip, noise_prob=noise_prob, intensity_scale_range=intensity_scale_range)
 
             z1 = model.encode(x)
             z2 = model.encode(x_aug)
@@ -1393,7 +1438,7 @@ def train_supervised_contrastive_ae(
             for batch in val_loader:
                 x      = batch[0].to(device)
                 labels = batch[2].to(device)
-                x_aug  = augment_contrastive_view(x, noise_prob=noise_prob)
+                x_aug  = augment_contrastive_view(x, rotation_mode=rotation_mode, use_flip=use_flip, noise_prob=noise_prob, intensity_scale_range=intensity_scale_range)
 
                 z1 = model.encode(x)
                 z2 = model.encode(x_aug)
@@ -1431,20 +1476,21 @@ def train_supervised_contrastive_ae(
             with torch.no_grad():
                 for batch in val_loader:
                     x     = batch[0].to(device)
-                    x_aug = augment_contrastive_view(x, noise_prob=noise_prob, use_flip=use_flip)
+                    x_aug = augment_contrastive_view(x, rotation_mode=rotation_mode, use_flip=use_flip, noise_prob=noise_prob, intensity_scale_range=intensity_scale_range)
                     recon, _ = model(x)
                     x = x.cpu(); x_aug = x_aug.cpu(); recon = recon.cpu()
                     break
 
-            n_show = min(6, x.size(0))
+            n_show = min(16, x.size(0))
+            idx = torch.randperm(x.size(0))[:n_show]
             fig2, axes = plt.subplots(3, n_show, figsize=(n_show, 3))
-            for i in range(n_show):
-                axes[0, i].imshow(x[i].squeeze(),     cmap="gray", vmin=0, vmax=1)
-                axes[0, i].axis("off")
-                axes[1, i].imshow(x_aug[i].squeeze(), cmap="gray", vmin=0, vmax=1)
-                axes[1, i].axis("off")
-                axes[2, i].imshow(recon[i].squeeze(), cmap="gray", vmin=0, vmax=1)
-                axes[2, i].axis("off")
+            for col, i in enumerate(idx):
+                axes[0, col].imshow(x[i].squeeze(),     cmap="gray", vmin=0, vmax=1)
+                axes[0, col].axis("off")
+                axes[1, col].imshow(x_aug[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+                axes[1, col].axis("off")
+                axes[2, col].imshow(recon[i].squeeze(), cmap="gray", vmin=0, vmax=1)
+                axes[2, col].axis("off")
             axes[0, 0].set_ylabel("clean", fontsize=7)
             axes[1, 0].set_ylabel("aug",   fontsize=7)
             axes[2, 0].set_ylabel("recon", fontsize=7)

@@ -14,8 +14,24 @@ import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
+try:
+    from lightgbm import LGBMClassifier
+    import lightgbm as lgb
+    _LGBM_AVAILABLE = True
+except ImportError:
+    _LGBM_AVAILABLE = False
+try:
+    from xgboost import XGBClassifier
+    _XGB_AVAILABLE = True
+except ImportError:
+    _XGB_AVAILABLE = False
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -159,7 +175,43 @@ _CLASSIFIERS = {
         max_depth=3,
         random_state=42,
     ),
+    "hist_gradient_boosting": lambda: HistGradientBoostingClassifier(
+        random_state=42,
+    ),
+    "mlp": lambda: MLPClassifier(
+        hidden_layer_sizes=(100, 100),
+        activation="relu",
+        solver="adam",
+        learning_rate_init=0.05,
+        max_iter=300,
+        random_state=42,
+    ),
 }
+
+if _LGBM_AVAILABLE:
+    _CLASSIFIERS["lightgbm"] = lambda: LGBMClassifier(
+        n_estimators=2000,
+        learning_rate=0.05,
+        num_leaves=31,
+        n_jobs=-1,
+        objective="multiclass",
+        random_state=42,
+    )
+
+if _XGB_AVAILABLE:
+    _CLASSIFIERS["xgboost"] = lambda: XGBClassifier(
+        n_estimators=5000,
+        learning_rate=0.05,
+        max_depth=6,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        tree_method="hist",
+        objective="multi:softprob",
+        eval_metric="mlogloss",
+        n_jobs=-1,
+        random_state=42,
+        early_stopping_rounds=100,
+    )
 
 
 def train_classifier(

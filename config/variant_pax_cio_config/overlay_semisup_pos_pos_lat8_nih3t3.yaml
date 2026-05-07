@@ -1,0 +1,25 @@
+# Overlay (POS type, dataset): semisup_pos | lat8 | dataset: nih3t3
+# MODEL_RUN is substituted at runtime by run_variant_pax_dataset.sh
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  predictions_csv : root_folder + "/ae_results/variant_pax/MODEL_RUN/semisup_pos/nih3t3/pos_cls_lat8/predictions_all.csv"
+output:
+  out_dir : root_folder + "/ae_results/variant_pax/MODEL_RUN/semisup_pos/nih3t3/pos_cls_lat8/overlay"
+labels:
+  label_order:
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+  colors:
+    - "#e6194b"
+    - "#f58231"
+    - "#3cb44b"
+    - "#4363d8"
+misc:
+  pad_size     : 64
+  image_size   : 1024
+  linewidth    : 0.6
+  dpi          : 300
+  title_prefix : "POS type | semisup_pos | lat8 | nih3t3"
+  log_level    : "INFO"

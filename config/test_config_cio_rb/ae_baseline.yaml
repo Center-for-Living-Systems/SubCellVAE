@@ -1,0 +1,43 @@
+# =============================================================================
+# AE variant: baseline  (standard convolutional AE, no label supervision)
+# Results: results/test_run/baseline/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+data:
+  patch_dirs:
+    - path           : root_folder + "/ae_results/patches/cio_rb/vinc/control/tiff_patches32"
+      condition      : 0
+      condition_name : "control"
+    - path           : root_folder + "/ae_results/patches/cio_rb/vinc/ycomp/tiff_patches32"
+      condition      : 1
+      condition_name : "ycomp"
+
+output:
+  result_dir : root_folder + "/ae_results/test_run_cio_rb/baseline"
+
+model:
+  model_type   : "ae"
+  latent_dim   : 8
+  input_ps     : 32
+  no_ch        : 1
+  BN_flag      : false
+  dropout_flag : false
+
+training:
+  epochs                : 500
+  lr                    : 0.001
+  batch_size            : 128
+  val_split             : 0.2
+  loss_norm_flag        : false
+  group_split           : true
+  lr_scheduler          : "cosine"
+  lr_min                : 1e-5
+
+reconstruction:
+  save_recon      : true
+  recon_pad_size  : 64
+  recon_image_size: 1024
+
+misc:
+  device    : "auto"
+  log_level : "INFO"

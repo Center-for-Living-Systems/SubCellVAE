@@ -1,0 +1,41 @@
+# Dataset: vinc (20250311 – Vinculin/rb647 + paxillin/m568)  [= training experiment]
+# Normalization: cell_insideoutside  (same as training data)
+paths:
+  root_folder      : "/home/lding/lding/fa_data_analysis"
+  image_folder     : root_folder + "/fa_data/other_paxillin/20250311_eGFPZyxin488_Phalloidin405_Vinculin(rb)647_paxillin(m)568/Ycomp"
+  cell_mask_folder : null
+  patch_output_dir : root_folder + "/ae_results/variant_pax/patches_cio/vinc/ycomp/tiff_patches32"
+  plot_output_dir  : root_folder + "/ae_results/variant_pax/patches_cio/vinc/ycomp/plot_patches32"
+experiment:
+  condition : "ycomp"
+  major_ch  : 1
+input:
+  file_type : "czi"
+  start_ind : 0
+  end_ind   : 999
+patch:
+  patch_size   : 32
+  mask_ratio   : 0.4
+  pad_size     : 64
+  patch_prefix : "ycomp"
+preprocessing:
+  rolling_ball_radius : null   # disabled: see training config
+normalization:
+  norm_mode : "cell_insideoutside"
+segmentation:
+  seg_ch                  : 0
+  seg_threshold           : 0.1
+  seg_close_size          : 11
+  seg_min_size_initial    : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final      : 30000
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+misc:
+  dpi           : 256
+  debug         : false
+  log_level     : "INFO"
+  use_timestamp : false

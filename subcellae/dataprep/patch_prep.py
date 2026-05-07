@@ -304,7 +304,14 @@ def compute_dataset_norm_stats(
         for ch in channels:
             ch_data = _extract_channel(raw, ch, filename, file_type)
             if rolling_ball_radius is not None:
-                ch_data = apply_rolling_ball(ch_data, radius=rolling_ball_radius)
+                # CZI images are divided by 255² at load time (values ~0–1).
+                # Rolling ball radius is in intensity units, so we must work at
+                # uint16 scale (radius=20 is meaningful there, not on 0–1 values).
+                if file_type == "czi":
+                    _scale = 255.0 * 255.0
+                    ch_data = apply_rolling_ball(ch_data * _scale, radius=rolling_ball_radius) / _scale
+                else:
+                    ch_data = apply_rolling_ball(ch_data, radius=rolling_ball_radius)
             pixel_pools[ch].append(ch_data.ravel())
 
     norm_stats: NormStats = {}
@@ -381,6 +388,32 @@ def normalize_image(
 # On-the-fly segmentation
 # ---------------------------------------------------------------------------
 
+def _correct_seg_illumination(cellmask_img: np.ndarray) -> np.ndarray:
+    """Gaussian flat-field correction for the segmentation channel.
+
+    The original pre-computed masks were generated with this correction applied
+    first, so on-the-fly segmentation must replicate it to produce comparable
+    cell outlines.
+
+    Models illumination as a Gaussian hill centred in the frame (slightly
+    brighter at centre — typical epi-fluorescence vignetting), then divides it
+    out so that the subsequent threshold is uniform across the field of view.
+
+    Background model: ``gauss(sigma=1 on [-1,1]) * 8 + 100``
+      - centre value: 108  (1.0 * 8 + 100)
+      - edge value  : ~100 (0.0 * 8 + 100)
+      → ~8 % centre-to-edge correction
+    """
+    H, W = cellmask_img.shape
+    y, x = np.meshgrid(np.linspace(-1, 1, H), np.linspace(-1, 1, W), indexing='ij')
+    gauss = np.exp(-((x ** 2 + y ** 2) / 2.0))   # sigma=1 on normalised [-1,1] grid
+    background = gauss * 8 + 100
+
+    smoothed = ndi.gaussian_filter(cellmask_img.astype(float), sigma=2,
+                                   mode='nearest', truncate=3)
+    return smoothed * 100.0 / background
+
+
 def segment_cell_mask(
     cellmask_img: np.ndarray,
     threshold: float = 0.2,
@@ -397,8 +430,12 @@ def segment_cell_mask(
 
     Steps
     -----
-    1. If the input is not already in [0, 1], apply a per-image 1 %–99 %
-       percentile stretch; otherwise use the values as-is.
+    0. Gaussian flat-field correction (:func:`_correct_seg_illumination`):
+       models centre-bright vignetting and divides it out so the threshold
+       is spatially uniform.  Matches the correction applied when the
+       pre-computed masks were generated.
+    1. If the corrected image is not already in [0, 1], apply a per-image
+       1 %–99 % percentile stretch; otherwise use the values as-is.
     2. Threshold at *threshold*.
     3. Remove small objects (< *min_size_initial* px).
     4. Binary closing with a disk of radius *close_size*.
@@ -435,16 +472,16 @@ def segment_cell_mask(
         Integer label image (same shape as *cellmask_img*). Background = 0;
         retained cell regions carry their original label values (≥ 1).
     """
-    # --- step 1: normalize to [0, 1] only if data is not already in [0, 1] ---
-    img_float = cellmask_img.astype(float)
-    if img_float.min() >= 0.0 and img_float.max() <= 1.0:
-        normalized = img_float
-    else:
-        normalized = _percentile_stretch(
-            img_float,
-            p1=float(np.percentile(img_float, 1)),
-            p99=float(np.percentile(img_float, 99)),
-        )
+    # --- step 0: flat-field / illumination correction ---
+    img_float = _correct_seg_illumination(cellmask_img)
+
+    # --- step 1: always percentile-stretch to [0, 1] ---
+    normalized = _percentile_stretch(
+        img_float,
+        p1=float(np.percentile(img_float, 1)),
+        p99=float(np.percentile(img_float, 99)),
+    )
+
 
     # --- step 2: threshold ---
     mask = normalized > threshold
@@ -518,10 +555,10 @@ def normalize_cell_insideoutside(
 
     Steps
     -----
-    1. ``int1 = img - median(pixels where seg == 0)``  — subtract background
-    2. ``int2 = int1 / mean(int1 where seg > 0)``      — scale by mean in-cell signal
-    3. Return ``int2 / scale``                          — divide by constant to keep
-       values in a reasonable range (default scale = 5)
+    1. ``mean_outside = mean(pixels where seg == 0)``
+    2. ``int1 = img - mean_outside``
+    3. ``denom = mean(img where seg > 0) - mean_outside``
+    4. Return ``int1 / (denom * scale)``  (no clipping — matches coworker formula)
 
     Parameters
     ----------
@@ -530,24 +567,25 @@ def normalize_cell_insideoutside(
     seg:
         2-D segmentation mask (unpadded). Zero = outside cell, nonzero = inside.
     scale:
-        Constant divisor applied after step 2. Default ``5.0``.
+        Constant divisor applied after step 3. Default ``5.0``.
 
     Returns
     -------
     np.ndarray
-        Normalised image (not clipped; values near [0, 1] for typical images).
+        Normalised image (unclipped; values may be slightly negative or >1).
     """
     outside = seg == 0
     inside  = seg > 0
 
-    bg = float(np.median(img[outside])) if outside.any() else 0.0
-    int1 = img - bg
+    mean_outside = float(np.mean(img[outside])) if outside.any() else 0.0
+    mean_inside  = float(np.mean(img[inside]))  if inside.any()  else mean_outside + 1.0
 
-    mean_inside = float(np.mean(int1[inside])) if inside.any() else 1.0
-    if mean_inside == 0.0:
-        mean_inside = 1.0
+    int1  = img - mean_outside
+    denom = mean_inside - mean_outside
+    if denom == 0.0:
+        denom = 1.0
 
-    return int1 / (mean_inside * scale)
+    return int1 / (denom * scale)
 
 
 def normalize_cell_minmax(
@@ -709,7 +747,13 @@ def load_and_pad(
 
     # --- rolling-ball background subtraction (before normalization) ---
     if rolling_ball_radius is not None:
-        img = apply_rolling_ball(img, radius=rolling_ball_radius)
+        # CZI images are divided by 255² at load time (values ~0–1).
+        # Rolling ball radius is in intensity units, so work at uint16 scale.
+        if file_type == "czi":
+            _scale = 255.0 * 255.0
+            img = apply_rolling_ball(img * _scale, radius=rolling_ball_radius) / _scale
+        else:
+            img = apply_rolling_ball(img, radius=rolling_ball_radius)
 
     # --- segmentation mask ---
     # Use pre-computed mask if folder is given and non-empty; otherwise segment on the fly.

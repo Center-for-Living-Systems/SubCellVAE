@@ -1,0 +1,53 @@
+# =============================================================================
+# Patch-prep pipeline configuration
+# File type  : .czi
+# Norm mode  : cell_insideoutside  (median BG sub → cell mean div → fixed scale)
+# Rolling ball: DISABLED  (for comparison with rolling-ball version)
+# =============================================================================
+
+paths:
+  root_folder       : "/home/lding/lding/fa_data_analysis"
+  image_folder      : root_folder + "/fa_data/031125data/Control"
+  cell_mask_folder  : root_folder + "/fa_cellseg/031125analysis/control/code_org_20250820_seg/mask"
+  patch_output_dir  : root_folder + "/ae_results/pax_ch_patch/patch_control_cio_norb"
+  plot_output_dir   : root_folder + "/ae_results/pax_ch_patch/plot_control_cio_norb"
+
+experiment:
+  condition : "czi_cio_norb"
+  major_ch  : 1
+
+input:
+  file_type : "czi"
+  start_ind : 0
+  end_ind   : 999
+
+patch:
+  patch_size   : 32
+  mask_ratio   : 0.4
+  pad_size     : 64
+  patch_prefix : "control"
+
+preprocessing:
+  rolling_ball_radius : null   # disabled — compare with rolling-ball version
+
+normalization:
+  norm_mode : "cell_insideoutside"
+
+segmentation:
+  seg_ch               : 3
+  seg_threshold        : 0.2
+  seg_close_size       : 5
+  seg_min_size_initial : 3
+  seg_min_size_post_close : 10
+  seg_min_size_final   : 30000
+
+augmentation:
+  rand_trans    : false
+  max_shift_px  : 0
+  rand_rota     : false
+  max_angle_deg : 0.0
+
+misc:
+  dpi       : 256
+  debug     : false
+  log_level : "INFO"

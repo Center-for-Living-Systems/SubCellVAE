@@ -1,0 +1,65 @@
+# =============================================================================
+# Classification: Position | AE: baseline | Features: latent 8-dim + dist 8-dim
+# Results: results/test_run/baseline/pos_cls_lat8dist8/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+input:
+  latents_csv : root_folder + "/ae_results/test_run_cio_rb/baseline/latents.csv"
+
+output:
+  out_dir : root_folder + "/ae_results/test_run_cio_rb/baseline/pos_cls_lat8dist8"
+
+labels:
+  label_col    : "Position"
+  label_csv    : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  filename_col : "unique_ID"
+  label_order  :
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+  exclude_labels: null
+
+features:
+  feature_cols          : null
+  include_mean_intensity: false
+
+split:
+  strategy    : "from_csv"
+  test_size   : 0.2
+  random_state: 42
+
+classifier:
+  type : "svm"   # "lgbm" | "svm" | "mlp" | "knn"
+
+lightgbm:
+  n_estimators     : 500
+  learning_rate    : 0.05
+  num_leaves       : 31
+  min_child_samples: 20
+  class_weight     : "balanced"
+  n_cv_folds       : 5
+
+svm:
+  C     : 10.0
+  gamma : "scale"
+
+mlp:
+  hidden_layers : [64, 32]
+  max_iter      : 1000
+
+knn:
+  n_neighbors : 10
+
+dist_features:
+  patch_prep_dirs:
+    - root_folder + "/ae_results/pax_ch_patch/plot_control_cell_insideoutside"
+    - root_folder + "/ae_results/pax_ch_patch/plot_ycomp_cell_insideoutside"
+  feature_weight : 20.0
+
+patch_sort:
+  sort_labelled  : true
+  sort_unlabelled: false
+
+misc:
+  log_level : "INFO"

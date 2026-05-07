@@ -33,6 +33,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from subcellae.analysis.feature_analysis import latent_distance_histogram
+
 log = logging.getLogger(__name__)
 
 _VALID_SPLITS = {"all", "train", "val"}
@@ -171,10 +173,16 @@ def _save_scatter(
 
 
 def _violin_or_box(ax, data: pd.DataFrame, x: str, y: str, order: list, kind: str):
+    present = set(data[x].dropna().unique())
+    filtered_order = [o for o in order if o in present]
+    if not filtered_order:
+        ax.set_visible(False)
+        return
     if kind == "violin":
-        sns.violinplot(data=data, x=x, y=y, order=order, ax=ax, inner="box")
+        sns.violinplot(data=data, x=x, y=y, order=filtered_order, ax=ax, inner="box")
     else:
-        sns.boxplot(data=data, x=x, y=y, order=order, ax=ax)
+        sns.boxplot(data=data, x=x, y=y, order=filtered_order, ax=ax)
+    ax.set_xticks(ax.get_xticks())
     ax.set_xticklabels(ax.get_xticklabels(), rotation=40, ha="right", fontsize=8)
 
 
@@ -264,8 +272,10 @@ def _metric_by_group_and_split(
         sns.boxplot(data=sub, x=group_col, y=metric_col,
                     hue="split" if use_hue else None,
                     hue_order=hue_order if use_hue else None,
-                    order=group_order, ax=ax)
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=40, ha="right", fontsize=8)
+                    order=group_order, ax=ax,
+                    legend=False)
+    ax.set_xticks(range(n_groups))
+    ax.set_xticklabels(group_order, rotation=40, ha="right", fontsize=8)
     ax.set_title(title)
     ax.set_xlabel(group_col)
     ax.set_ylabel(metric_col)
@@ -659,6 +669,62 @@ def run_analysis_pipeline(cfg: AnalysisConfig):
         log.warning("  'norm_mse' column not found – skipping norm_mse plots")
 
     # ------------------------------------------------------------------
+    # 10b. Reconstruction L1 (MAE)
+    # ------------------------------------------------------------------
+    log.info("Step 10b: Reconstruction L1 plots …")
+    if "recon_l1" in df.columns:
+        _distribution_plot(
+            df["recon_l1"].values,
+            title="Reconstruction L1 (MAE) – all patches",
+            xlabel="Reconstruction L1",
+            save_path=cfg.out_dir / "recon_l1_distribution.png",
+        )
+        _metric_by_group_and_split(
+            df, "recon_l1", "condition_name", cond_order,
+            title="Reconstruction L1 by condition × split",
+            save_path=cfg.out_dir / "recon_l1_by_condition_split.png",
+            kind=cfg.boxplot_kind,
+        )
+        if has_annotation:
+            df_ann = df[df["annotation_label"] != -1]
+            _metric_by_group_and_split(
+                df_ann, "recon_l1", "annotation_label_name", ann_order,
+                title="Reconstruction L1 by annotation label × split",
+                save_path=cfg.out_dir / "recon_l1_by_annotation_split.png",
+                kind=cfg.boxplot_kind,
+            )
+    else:
+        log.warning("  'recon_l1' column not found – skipping L1 plots")
+
+    # ------------------------------------------------------------------
+    # 10c. Hessian L1 (structural texture error)
+    # ------------------------------------------------------------------
+    log.info("Step 10c: Hessian L1 plots …")
+    if "recon_hessian_l1" in df.columns:
+        _distribution_plot(
+            df["recon_hessian_l1"].values,
+            title="Hessian L1 – all patches",
+            xlabel="Hessian L1  (|ΔIxx| + |ΔIyy| + 2|ΔIxy|, interior pixels)",
+            save_path=cfg.out_dir / "hessian_l1_distribution.png",
+        )
+        _metric_by_group_and_split(
+            df, "recon_hessian_l1", "condition_name", cond_order,
+            title="Hessian L1 by condition × split",
+            save_path=cfg.out_dir / "hessian_l1_by_condition_split.png",
+            kind=cfg.boxplot_kind,
+        )
+        if has_annotation:
+            df_ann = df[df["annotation_label"] != -1]
+            _metric_by_group_and_split(
+                df_ann, "recon_hessian_l1", "annotation_label_name", ann_order,
+                title="Hessian L1 by annotation label × split",
+                save_path=cfg.out_dir / "hessian_l1_by_annotation_split.png",
+                kind=cfg.boxplot_kind,
+            )
+    else:
+        log.warning("  'recon_hessian_l1' column not found – skipping Hessian L1 plots")
+
+    # ------------------------------------------------------------------
     # 11. Mean intensity vs latent dimension scatter
     # ------------------------------------------------------------------
     log.info("Step 11: Mean intensity vs latent dimension scatter …")
@@ -670,6 +736,42 @@ def run_analysis_pipeline(cfg: AnalysisConfig):
         )
     else:
         log.warning("  'mean_intensity' column not found – skipping intensity scatter")
+
+    # ------------------------------------------------------------------
+    # Step 12: Latent distance histograms (intra vs inter class)
+    # ------------------------------------------------------------------
+    log.info("Step 12: Latent distance histograms …")
+    X_all = df[latent_cols].values
+
+    try:
+        cond_dist = latent_distance_histogram(
+            X_all,
+            df["condition_name"].values,
+            save_path=str(cfg.out_dir / "latent_dist_condition.png"),
+            sample_pairs=50_000,
+            title="Latent distances — condition (control vs ycomp)",
+        )
+        log.info("  condition  ratio=%.3f  (inter/intra mean)",
+                 cond_dist["mean_inter_over_intra_ratio"])
+        results["latent_dist_condition"] = cond_dist
+    except Exception as e:
+        log.warning("  condition distance histogram skipped: %s", e)
+
+    if has_annotation:
+        df_ann = df[df["annotation_label"] != -1]
+        try:
+            ann_dist = latent_distance_histogram(
+                df_ann[latent_cols].values,
+                df_ann["annotation_label_name"].values,
+                save_path=str(cfg.out_dir / "latent_dist_annotation.png"),
+                sample_pairs=50_000,
+                title="Latent distances — annotation labels",
+            )
+            log.info("  annotation ratio=%.3f  (inter/intra mean)",
+                     ann_dist["mean_inter_over_intra_ratio"])
+            results["latent_dist_annotation"] = ann_dist
+        except Exception as e:
+            log.warning("  annotation distance histogram skipped: %s", e)
 
     # ------------------------------------------------------------------
     # Save augmented CSV

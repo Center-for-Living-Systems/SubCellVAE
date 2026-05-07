@@ -1,0 +1,29 @@
+# AE Apply (cio): semicon_pos | dataset: vinc
+# MODEL_RUN is substituted at runtime by run_variant_pax_cio.sh
+root_folder : "/home/lding/lding/fa_data_analysis"
+model:
+  model_pt : root_folder + "/ae_results/MODEL_RUN/semicon_pos/model_final.pt"
+
+data:
+  patch_dirs:
+    - path          : root_folder + "/ae_results/variant_pax/patches_cio/vinc/control/tiff_patches32"
+      condition     : 0
+      condition_name: "control"
+    - path          : root_folder + "/ae_results/variant_pax/patches_cio/vinc/ycomp/tiff_patches32"
+      condition     : 1
+      condition_name: "ycomp"
+
+output:
+  out_dir : root_folder + "/ae_results/variant_pax/MODEL_RUN/semicon_pos/vinc"
+
+inference:
+  batch_size : 128
+
+reconstruction:
+  save_recon       : true
+  recon_pad_size   : 64
+  recon_image_size : 1024
+
+misc:
+  device    : "auto"
+  log_level : "INFO"
