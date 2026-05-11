@@ -287,10 +287,11 @@ def _step_scheduler(scheduler, mode, val_loss):
 
 def train_ae(model, train_loader, val_loader, device, epochs, lr,
              loss_norm_flag, result_dir,
+             weight_decay=0.0,
              lr_scheduler="none", lr_scheduler_patience=20,
              lr_scheduler_factor=0.5, lr_min=1e-6):
     """Training loop for the standard AE."""
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = normalized_mse if loss_norm_flag else nn.MSELoss()
 
     scheduler = _make_scheduler(optimizer, lr_scheduler, epochs,

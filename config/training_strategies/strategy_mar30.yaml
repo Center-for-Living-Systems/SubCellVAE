@@ -1,0 +1,76 @@
+# =============================================================================
+# Training strategy: Mar30-style
+#   500 epochs, weight_decay=1e-4, warmup 200 epochs, best ckpt after 200, no LR scheduler
+#   Characteristics: adds a recon-only warmup phase before cls loss kicks in
+#   Use for: more stable cls head training; avoids early cls-dominated collapse
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+data:
+  patch_dirs:
+    - path           : root_folder + "/ae_results/pax_ch_patch_dataset_norm/patch_control_20260507_1712"
+      condition      : 0
+      condition_name : "control"
+    - path           : root_folder + "/ae_results/pax_ch_patch_dataset_norm/patch_ycomp_20260507_1602"
+      condition      : 1
+      condition_name : "ycomp"
+
+output:
+  result_dir : root_folder + "/ae_results/strategy_sweep/strategy_mar30/semisup_both"
+
+model:
+  model_type   : "semisup"
+  latent_dim   : 8
+  input_ps     : 32
+  no_ch        : 1
+  BN_flag      : false
+  dropout_flag : false
+
+  num_classes  : 5
+  lambda_recon : 1.0
+  lambda_cls   : 1.0
+
+  num_classes_2 : 4
+  lambda_cls_2  : 1.0
+
+training:
+  epochs                  : 500
+  lr                      : 0.001
+  batch_size              : 128
+  val_split               : 0.2
+  loss_norm_flag          : false
+  group_split             : true
+  weight_decay            : 0.0001    # L2 regularisation
+  warmup_epochs           : 200       # recon-only for first 200 epochs
+  early_stopping_patience : 0         # run all 500 epochs
+  min_epochs_for_best     : 200       # best checkpoint tracked from epoch 200 onward
+  lr_scheduler            : "none"
+
+annotation:
+  annotation_file : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  label_col       : "classification"
+  filename_col    : "unique_ID"
+  label_order     :
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+
+  annotation_file_2 : root_folder + "/labelling/paxdata_paxpatch_batch1and2_combined_labels.csv"
+  label_col_2       : "Position"
+  filename_col_2    : "unique_ID"
+  label_order_2     :
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+
+reconstruction:
+  save_recon      : true
+  recon_pad_size  : 64
+  recon_image_size: 1024
+
+misc:
+  device    : "auto"
+  log_level : "INFO"

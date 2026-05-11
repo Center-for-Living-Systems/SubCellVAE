@@ -205,8 +205,8 @@ class AEConfig:
     lr_scheduler_factor: float  = 0.5     # LR reduction factor (plateau)
     lr_min: float               = 1e-6    # minimum LR floor
 
-    # --- semisup regularisation / stability ---
-    weight_decay: float          = 1e-4   # Adam L2 weight decay
+    # --- regularisation / training stability ---
+    weight_decay: float          = 1e-4   # Adam L2 weight decay (all model types)
     early_stopping_patience: int = 0      # 0 = disabled
     min_epochs_for_best: int     = 200    # best-checkpoint tracking starts at this epoch
     warmup_epochs: int           = 200    # recon-only phase before adding cls loss
@@ -952,6 +952,7 @@ def run_ae_pipeline(cfg: AEConfig):
             lr=cfg.lr,
             loss_norm_flag=cfg.loss_norm_flag,
             result_dir=result_dir_str,
+            weight_decay=cfg.weight_decay,
             **_sched_kwargs,
         )
 
