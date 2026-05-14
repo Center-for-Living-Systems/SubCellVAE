@@ -1,0 +1,28 @@
+# Visualization: strategy: mar30 | features: lat8
+input:
+  latents_csv          : "/home/lding/lding/fa_data_analysis/ae_results/strategy_sweep/strategy_mar30/semisup_both/latents.csv"
+  fa_type_results_csv  : "/home/lding/lding/fa_data_analysis/ae_results/strategy_sweep/strategy_mar30/semisup_both/fa_cls_lat8/predictions_all.csv"
+  position_results_csv : "/home/lding/lding/fa_data_analysis/ae_results/strategy_sweep/strategy_mar30/semisup_both/pos_cls_lat8/predictions_all.csv"
+  umap_model_pkl       : "/home/lding/lding/fa_data_analysis/ae_results/strategy_sweep/strategy_mar30/semisup_both/fa_cls_lat8/umap_all_model.pkl"
+
+output:
+  out_dir : "/home/lding/lding/fa_data_analysis/ae_results/strategy_sweep/strategy_mar30/semisup_both/vis_lat8"
+
+labels:
+  fa_type_label_col  : "classification"
+  position_label_col : "Position"
+  fa_type_order:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+  position_order:
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+
+misc:
+  random_state : 42
+  log_level    : "INFO"
