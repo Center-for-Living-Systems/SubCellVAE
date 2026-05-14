@@ -413,6 +413,12 @@ def run_analysis_pipeline(cfg: AnalysisConfig):
     log.info("  Latent dims: %d  (%s … %s)", len(latent_cols),
              latent_cols[0], latent_cols[-1])
 
+    proj_cols = [c for c in df.columns if c.startswith("p_")]
+    has_proj  = len(proj_cols) > 0
+    if has_proj:
+        log.info("  Proj dims:   %d  (%s … %s)", len(proj_cols),
+                 proj_cols[0], proj_cols[-1])
+
     # -- resolve label orders -----------------------------------------
     cond_order = cfg.condition_name_order or sorted(df["condition_name"].dropna().unique().tolist())
     split_order = ["train", "val"]
@@ -476,6 +482,66 @@ def run_analysis_pipeline(cfg: AnalysisConfig):
         df[f"{method}_2"] = emb[:, 1]
 
     results["embeddings"] = embeddings
+
+    # ------------------------------------------------------------------
+    # 2b. z_proj embeddings (contrastive AE only)
+    # ------------------------------------------------------------------
+    proj_embeddings: dict[str, np.ndarray] = {}
+
+    if has_proj:
+        log.info("Step 2b: Computing z_proj embeddings …")
+        proj_latents = df[proj_cols].values.astype(np.float32)
+
+        for method in cfg.umap_methods:
+            log.info("  %s (z_proj) …", method)
+            if method.upper() == "UMAP":
+                from umap import UMAP
+                reducer_proj = UMAP(
+                    n_components=2,
+                    n_neighbors=cfg.umap_n_neighbors,
+                    min_dist=cfg.umap_min_dist,
+                    random_state=cfg.umap_random_state,
+                )
+                emb_proj = reducer_proj.fit_transform(proj_latents)
+                joblib.dump(reducer_proj, str(cfg.out_dir / "umap_proj_model.pkl"))
+
+            elif method.upper() == "PHATE":
+                try:
+                    import phate
+                except ImportError:
+                    log.warning("  phate package not installed – skipping PHATE for z_proj")
+                    continue
+                reducer_proj = phate.PHATE(k=cfg.phate_k, random_state=42)
+                emb_proj = reducer_proj.fit_transform(proj_latents)
+                joblib.dump(reducer_proj, str(cfg.out_dir / "phate_proj_model.pkl"))
+
+            else:
+                log.warning("  Unknown embedding method %r – skipping z_proj", method)
+                continue
+
+            proj_embeddings[method] = emb_proj
+            df[f"{method}_proj_1"] = emb_proj[:, 0]
+            df[f"{method}_proj_2"] = emb_proj[:, 1]
+
+        # scatter plots for z_proj
+        for method, emb_proj in proj_embeddings.items():
+            mdir = cfg.out_dir / f"{method.lower()}_proj"
+            mdir.mkdir(exist_ok=True)
+
+            _save_scatter(emb_proj, df, "condition_name", cond_order, method,
+                          f"{method} z_proj – condition",
+                          mdir / "by_condition.png")
+            _save_scatter(emb_proj, df, "split", split_order, method,
+                          f"{method} z_proj – split",
+                          mdir / "by_split.png")
+            if has_annotation:
+                df_ann = df[df["annotation_label"] != -1]
+                emb_proj_ann = emb_proj[df["annotation_label"].values != -1]
+                _save_scatter(emb_proj_ann, df_ann, "annotation_label_name", ann_order,
+                              method, f"{method} z_proj – annotation label",
+                              mdir / "by_annotation.png")
+
+    results["proj_embeddings"] = proj_embeddings
 
     # ------------------------------------------------------------------
     # 3. Clustering

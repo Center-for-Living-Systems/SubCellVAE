@@ -1,0 +1,42 @@
+# =============================================================================
+# Analysis: contrastive AE trained on CIO-RB normalized nih3t3 patches
+# Produces UMAPs for both z_recon (z_*) and z_proj (p_*)
+# Results: ae_results/contrastive_run/contrastive_cio_rb/analysis/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+input:
+  latents_csv  : root_folder + "/ae_results/contrastive_run/contrastive_cio_rb/latents.csv"
+  split_filter : "all"    # "all" | "train" | "val"
+
+output:
+  out_dir : root_folder + "/ae_results/contrastive_run/contrastive_cio_rb/analysis"
+
+embedding:
+  methods:
+    - UMAP
+  umap_n_neighbors  : 15
+  umap_min_dist     : 0.1
+  umap_random_state : 42
+
+clustering:
+  kmeans_enabled    : true
+  kmeans_n_clusters : 5
+  dbscan_enabled    : false
+  dbscan_eps        : 0.5
+  dbscan_min_samples: 10
+  boxplot_kind      : box
+
+label_orders:
+  annotation_label_name:
+    - "Nascent Adhesion"
+    - "focal complex"
+    - "focal adhesion"
+    - "fibrillar adhesion"
+    - "No adhesion"
+  condition_name:
+    - "control"
+    - "ycomp"
+
+misc:
+  log_level : "INFO"

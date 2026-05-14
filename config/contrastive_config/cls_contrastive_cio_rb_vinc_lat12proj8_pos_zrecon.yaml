@@ -1,0 +1,48 @@
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+input:
+  latents_csv : root_folder + "/ae_results/contrastive_run/contrastive_cio_rb_vinc_lat12proj8/latents.csv"
+
+output:
+  out_dir : root_folder + "/ae_results/contrastive_run/contrastive_cio_rb_vinc_lat12proj8/pos_cls_zrecon"
+
+labels:
+  label_col    : "Position"
+  label_csv    : "/home/lding/lding/fa_data_analysis/labelling/vinc_combined_labels.csv"
+  filename_col : "unique_ID"
+  label_order  :
+    - "Cell Protruding Edge"
+    - "Cell Periphery/other"
+    - "Lamella"
+    - "Cell Body"
+  exclude_labels:
+    - "No Category/uncertain"
+  metrics_exclude_labels: null
+
+features:
+  feature_cols   : null
+  feature_prefix : "z_"
+  include_mean_intensity: false
+
+split:
+  strategy    : "from_csv"
+  test_size   : 0.2
+  random_state: 42
+
+classifier:
+  type : "svm"
+
+svm:
+  C     : 10.0
+  gamma : "scale"
+
+dist_features:
+  patch_prep_dirs: null
+  feature_weight : 20.0
+
+patch_sort:
+  sort_labelled  : true
+  sort_unlabelled: false
+
+misc:
+  log_level : "INFO"

@@ -18,8 +18,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import shutil
 from pathlib import Path
+
+# Ensure this repo's subcellae package takes precedence over any editable installs
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 try:
     import yaml

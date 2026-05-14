@@ -57,7 +57,9 @@ class ClsApplyConfig:
         When provided, the existing UMAP transform is used; otherwise a new UMAP
         is fit on the new data.
     feature_cols : list[str] or None
-        Explicit feature column names.  None → auto-detect all ``z_*`` columns.
+        Explicit feature column names.  None → auto-detect using ``feature_prefix``.
+    feature_prefix : str
+        Column prefix for auto-detection.  ``"z_"`` → z_recon; ``"p_"`` → z_proj.
     dist_patch_prep_dirs : list[str]
         Patch-prep output directories for distance features (same semantics as
         in :class:`ClassificationConfig`).  Leave empty for latent-only features.
@@ -79,6 +81,7 @@ class ClsApplyConfig:
 
     # --- features ---
     feature_cols: list = None
+    feature_prefix: str = "z_"   # "z_" → z_recon, "p_" → z_proj
     dist_patch_prep_dirs: list = None
     dist_feature_weight: float = 100.0
 
@@ -215,7 +218,7 @@ def run_cls_apply_pipeline(cfg: ClsApplyConfig) -> pd.DataFrame:
     if cfg.feature_cols:
         feat_cols = list(cfg.feature_cols)
     else:
-        feat_cols = sorted([c for c in df.columns if c.startswith("z_")])
+        feat_cols = sorted([c for c in df.columns if c.startswith(cfg.feature_prefix)])
 
     if cfg.dist_patch_prep_dirs:
         # Match the feature selection used during training: d\d{2} columns only

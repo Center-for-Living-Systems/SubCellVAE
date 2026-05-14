@@ -1,0 +1,51 @@
+# =============================================================================
+# AE variant: contrastive  (NT-Xent contrastive AE)
+# Normalization: CIO-RB  |  Dataset: vinc (vinculin channel) control + ycomp
+# latent_dim=12, proj_dim=8  →  projector: 12→48→8
+# Results: ae_results/contrastive_run/contrastive_cio_rb_vinc_lat12proj8/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+data:
+  patch_dirs:
+    - path           : root_folder + "/ae_results/patches/cio_rb/vinc/control/tiff_patches32"
+      condition      : 0
+      condition_name : "control"
+    - path           : root_folder + "/ae_results/patches/cio_rb/vinc/ycomp/tiff_patches32"
+      condition      : 1
+      condition_name : "ycomp"
+
+output:
+  result_dir : root_folder + "/ae_results/contrastive_run/contrastive_cio_rb_vinc_lat12proj8"
+
+model:
+  model_type   : "contrastive"
+  latent_dim   : 12
+  input_ps     : 32
+  no_ch        : 1
+  BN_flag      : false
+  dropout_flag : false
+
+  proj_dim              : 8
+  noise_prob            : 0.05
+  temperature           : 0.5
+  lambda_recon          : 1.0
+  lambda_contrast       : 0.5
+  intensity_scale_range : [0.8, 1.2]
+
+training:
+  epochs         : 500
+  lr             : 0.001
+  batch_size     : 128
+  val_split      : 0.2
+  loss_norm_flag : false
+  group_split    : true
+
+reconstruction:
+  save_recon      : true
+  recon_pad_size  : 64
+  recon_image_size: 1024
+
+misc:
+  device    : "auto"
+  log_level : "INFO"

@@ -373,6 +373,7 @@ def _extract_latents(model, loader, device: str, model_type: str) -> dict:
     model.eval()
     all_paths, all_conditions, all_ann_labels, all_ann_labels_2, all_latents = [], [], [], [], []
     all_raws, all_recons = [], []
+    all_proj_latents = []   # z_proj from projection head (contrastive only)
 
     with torch.no_grad():
         for batch in loader:
@@ -391,6 +392,8 @@ def _extract_latents(model, loader, device: str, model_type: str) -> dict:
                 x_hat, z, _ = model(x)
             else:  # contrastive
                 x_hat, z = model(x)
+                z_proj = model.project(z)
+                all_proj_latents.append(z_proj.cpu().numpy())
 
             all_paths.extend(paths)
             all_conditions.extend(conditions.tolist())
@@ -429,6 +432,7 @@ def _extract_latents(model, loader, device: str, model_type: str) -> dict:
         "annotation_labels":   all_ann_labels,
         "annotation_labels_2": all_ann_labels_2,
         "latents":             np.concatenate(all_latents, axis=0),
+        "proj_latents":        np.concatenate(all_proj_latents, axis=0) if all_proj_latents else None,
         "raws":                all_raws,
         "recons":              all_recons,
         "recon_mse":           all_mse,
@@ -465,10 +469,13 @@ def _save_latent_csv(
     int_to_label2 = {i: lbl for i, lbl in enumerate(label_order_2)} if label_order_2 else {}
     has_label2    = bool(label_order_2)
 
+    has_proj = train_result.get("proj_latents") is not None
+
     rows = []
     for split_name, result in [("train", train_result), ("val", val_result)]:
-        latents = result["latents"]
-        ann2_list = result.get("annotation_labels_2", [-1] * len(result["paths"]))
+        latents      = result["latents"]
+        proj_latents = result.get("proj_latents")
+        ann2_list    = result.get("annotation_labels_2", [-1] * len(result["paths"]))
         for i, path in enumerate(result["paths"]):
             condition = result["conditions"][i]
             ann_int   = result["annotation_labels"][i]
@@ -493,9 +500,12 @@ def _save_latent_csv(
                 row["annotation_label_2_name"] = int_to_label2.get(ann_int2, "")
             for d, val in enumerate(latents[i]):
                 row[f"z_{d}"] = float(val)
+            if has_proj and proj_latents is not None:
+                for d, val in enumerate(proj_latents[i]):
+                    row[f"p_{d}"] = float(val)
             rows.append(row)
 
-    # column order: metadata, quality metrics, latent dims, annotation
+    # column order: metadata, quality metrics, latent dims, proj dims, annotation
     latent_dim = result["latents"].shape[1]
     latent_cols = [f"z_{d}" for d in range(latent_dim)]
     meta_cols   = ["filename", "filepath", "condition", "condition_name",
@@ -504,7 +514,11 @@ def _save_latent_csv(
     ann_cols    = ["annotation_label", "annotation_label_name"]
     if has_label2:
         ann_cols += ["annotation_label_2", "annotation_label_2_name"]
-    df = pd.DataFrame(rows, columns=meta_cols + metric_cols + latent_cols + ann_cols)
+    proj_cols = []
+    if has_proj and train_result["proj_latents"] is not None:
+        proj_dim  = train_result["proj_latents"].shape[1]
+        proj_cols = [f"p_{d}" for d in range(proj_dim)]
+    df = pd.DataFrame(rows, columns=meta_cols + metric_cols + latent_cols + proj_cols + ann_cols)
 
     out_path = result_dir / "latents.csv"
     df.to_csv(out_path, index=False)

@@ -1062,10 +1062,11 @@ class ContrastiveAE(nn.Module):
         )
 
         # ---------- projection head (for contrastive loss only) ----------
+        proj_hidden = latent_dim * 4  # scales with representation size
         self.projector = nn.Sequential(
-            nn.Linear(latent_dim, 128),
+            nn.Linear(latent_dim, proj_hidden),
             nn.ReLU(),
-            nn.Linear(128, proj_dim),
+            nn.Linear(proj_hidden, proj_dim),
         )
 
         self.final_size = final_size

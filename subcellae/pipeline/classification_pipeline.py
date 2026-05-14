@@ -109,8 +109,11 @@ class ClassificationConfig:
     Features
     --------
     feature_cols : list[str] or None
-        Explicit feature column names.  ``None`` → auto-detect all ``z_*``
-        columns from ``latents.csv``.
+        Explicit feature column names.  ``None`` → auto-detect using
+        ``feature_prefix``.
+    feature_prefix : str
+        Column prefix used for auto-detection when ``feature_cols`` is None.
+        ``"z_"`` selects z_recon dims; ``"p_"`` selects z_proj dims.
     include_mean_intensity : bool
         Append ``mean_intensity`` to the feature set.
 
@@ -151,6 +154,7 @@ class ClassificationConfig:
 
     # --- features ---
     feature_cols: list           = None
+    feature_prefix: str          = "z_"   # "z_" → z_recon, "p_" → z_proj
     include_mean_intensity: bool = False
 
     # --- split ---
@@ -759,7 +763,7 @@ def run_classification_pipeline(cfg: ClassificationConfig) -> dict:
     if cfg.feature_cols:
         feat_cols = list(cfg.feature_cols)
     else:
-        feat_cols = [c for c in df.columns if c.startswith("z_")]
+        feat_cols = [c for c in df.columns if c.startswith(cfg.feature_prefix)]
 
     if dist_cols:
         d_feats = [c for c in dist_cols if c.startswith("d")]   # d00..d07; exclude equiv_diam

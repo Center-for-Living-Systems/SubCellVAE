@@ -60,6 +60,7 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Classi
 
     # ---- features ----
     feature_cols           = _get("features", "feature_cols",           None)
+    feature_prefix         = str(_get("features", "feature_prefix",     "z_"))
     include_mean_intensity = bool(_get("features", "include_mean_intensity", False))
 
     # ---- split ----
@@ -107,6 +108,7 @@ def load_config(yaml_path: str | Path, root_folder: str | None = None) -> Classi
         exclude_labels=exclude_labels,
         metrics_exclude_labels=metrics_exclude_labels,
         feature_cols=feature_cols,
+        feature_prefix=feature_prefix,
         include_mean_intensity=include_mean_intensity,
         split_strategy=split_strategy,
         test_size=test_size,

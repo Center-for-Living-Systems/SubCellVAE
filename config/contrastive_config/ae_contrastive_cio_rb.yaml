@@ -1,0 +1,52 @@
+# =============================================================================
+# AE variant: contrastive  (NT-Xent contrastive AE)
+# Normalization: CIO-RB (cell-inside-outside + rolling-ball background subtraction)
+# Dataset: nih3t3 control + ycomp
+# Results: ae_results/contrastive_run/contrastive_cio_rb/
+# =============================================================================
+root_folder : "/home/lding/lding/fa_data_analysis"
+
+data:
+  patch_dirs:
+    - path           : root_folder + "/ae_results/patches/cio_rb/nih3t3/control/tiff_patches32"
+      condition      : 0
+      condition_name : "control"
+    - path           : root_folder + "/ae_results/patches/cio_rb/nih3t3/ycomp/tiff_patches32"
+      condition      : 1
+      condition_name : "ycomp"
+
+output:
+  result_dir : root_folder + "/ae_results/contrastive_run/contrastive_cio_rb"
+
+model:
+  model_type   : "contrastive"
+  latent_dim   : 8
+  input_ps     : 32
+  no_ch        : 1
+  BN_flag      : false
+  dropout_flag : false
+
+  # -- Contrastive-specific --------------------------------------------------
+  proj_dim              : 64       # projection-head output dim for NT-Xent loss
+  noise_prob            : 0.05     # salt-and-pepper corruption probability
+  temperature           : 0.5      # NT-Xent softmax temperature
+  lambda_recon          : 1.0      # weight on the reconstruction term
+  lambda_contrast       : 0.5      # weight on the contrastive term
+  intensity_scale_range : [0.8, 1.2]   # per-image intensity multiplier range
+
+training:
+  epochs         : 500
+  lr             : 0.001
+  batch_size     : 128
+  val_split      : 0.2
+  loss_norm_flag : false
+  group_split    : true
+
+reconstruction:
+  save_recon      : true
+  recon_pad_size  : 64
+  recon_image_size: 1024
+
+misc:
+  device    : "auto"
+  log_level : "INFO"
